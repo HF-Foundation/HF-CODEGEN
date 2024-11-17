@@ -1,0 +1,14 @@
+[package]
+name = "hf_codegen"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+hf_parser_rust = { path = "../HF-PARSER-RUST" }
+
+thiserror-no-std = "2.0.2"
+iced-x86 = { version = "1.21.0", default-features = false, features = [
+    "no_std",
+    "encoder",
+    "code_asm",
+] }
