@@ -81,10 +81,35 @@ impl IrOp {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct IrNode {
     pub node: IrOp,
     pub span: Span,
+}
+
+impl core::fmt::Debug for IrNode {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        if f.alternate()
+            && matches!(self.node, IrOp::Function(_, _))
+            || matches!(self.node, IrOp::Condition(_))
+        {
+            write!(
+                f,
+                "{:#?} \x1b[90m({}:{})\x1b[0m",
+                self.node,
+                self.span.location.0 + 1,
+                self.span.location.1 + 1
+            )
+        } else {
+            write!(
+                f,
+                "{:?} \x1b[90m({}:{})\x1b[0m",
+                self.node,
+                self.span.location.0 + 1,
+                self.span.location.1 + 1
+            )
+        }
+    }
 }
 
 pub struct IrBuilder {

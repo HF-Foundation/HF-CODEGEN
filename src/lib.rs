@@ -6,9 +6,9 @@ use alloc::vec::Vec;
 
 use hf_parser_rust::ast::AstNode;
 
-mod compiler;
-mod ir;
-mod target;
+pub mod compiler;
+pub mod ir;
+pub mod target;
 
 pub use compiler::{CompilerError, CompilerErrorKind};
 use target::*;
