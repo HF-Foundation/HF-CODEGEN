@@ -12,3 +12,4 @@ iced-x86 = { version = "1.21.0", default-features = false, features = [
     "encoder",
     "code_asm",
 ] }
+hashbrown = "0.15.1"

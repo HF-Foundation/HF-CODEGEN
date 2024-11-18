@@ -1,7 +1,8 @@
-use alloc::string::ToString;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use iced_x86::code_asm::*;
+use hashbrown::HashMap;
+use iced_x86::code_asm::{CodeLabel, *};
 
 use super::CompilerError;
 use crate::ir::{IrNode, IrOp};
@@ -24,6 +25,14 @@ impl Compiler {
     /// R8: address of the current cell
     ///     access it via `byte_ptr(r8)` aka `byte ptr[r8]`
     fn translate_ir_node(&mut self, ir_node: IrNode) -> Result<(), CompilerError> {
+        self.translate_ir_node_impl(ir_node, HashMap::new())
+    }
+
+    fn translate_ir_node_impl(
+        &mut self,
+        ir_node: IrNode,
+        mut functions: HashMap<String, CodeLabel>,
+    ) -> Result<(), CompilerError> {
         match ir_node.node {
             IrOp::Add(n) => {
                 self.code_asm
@@ -126,6 +135,101 @@ impl Compiler {
                         kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
                         span: Some(ir_node.span),
                     })?;
+            }
+            // equivalent:
+            //
+            // while *r8 != 0 {
+            //    // code
+            // }
+            //
+            // or in assembly:
+            //
+            // start_label:
+            //    cmp byte ptr[r8], 0
+            //    je end_label
+            //    ... ; code
+            //    jmp start_label
+            // end_label:
+            //
+            IrOp::Condition(cond_ir_nodes) => {
+                let mut start_label = self.code_asm.create_label();
+                let mut end_label = self.code_asm.create_label();
+
+                // phantom instruction so we have an address
+                self.code_asm.zero_bytes().map_err(|e| CompilerError {
+                    kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                    span: Some(ir_node.span),
+                })?;
+
+                self.code_asm
+                    .set_label(&mut start_label)
+                    .map_err(|e| CompilerError {
+                        kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                        span: Some(ir_node.span),
+                    })?;
+
+                self.code_asm
+                    .cmp(byte_ptr(r8), 0)
+                    .map_err(|e| CompilerError {
+                        kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                        span: Some(ir_node.span),
+                    })?;
+                self.code_asm.je(end_label).map_err(|e| CompilerError {
+                    kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                    span: Some(ir_node.span),
+                })?;
+
+                // now code
+                for cond_ir_node in cond_ir_nodes {
+                    self.translate_ir_node_impl(cond_ir_node, functions.clone())?;
+                }
+
+                self.code_asm.jmp(start_label).map_err(|e| CompilerError {
+                    kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                    span: Some(ir_node.span),
+                })?;
+
+                self.code_asm
+                    .set_label(&mut end_label)
+                    .map_err(|e| CompilerError {
+                        kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                        span: Some(ir_node.span),
+                    })?;
+
+                // phantom instruction so we have an address
+                self.code_asm.zero_bytes().map_err(|e| CompilerError {
+                    kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                    span: Some(ir_node.span),
+                })?;
+            }
+            IrOp::Function(name, fn_ir_nodes) => {
+                let mut fn_label = self.code_asm.create_label();
+                self.code_asm
+                    .set_label(&mut fn_label)
+                    .map_err(|e| CompilerError {
+                        kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                        span: Some(ir_node.span),
+                    })?;
+                // we dont care if the function already exists, if it does, tough luck,
+                // we're overwriting it and we're not going to check if it's the same
+                functions.insert(name.clone(), fn_label);
+                for fn_ir_node in fn_ir_nodes {
+                    self.translate_ir_node_impl(fn_ir_node, functions.clone())?;
+                }
+                self.code_asm.ret().map_err(|e| CompilerError {
+                    kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                    span: Some(ir_node.span),
+                })?;
+            }
+            IrOp::FunctionCall(name) => {
+                let fn_label = functions.get(&name).ok_or(CompilerError {
+                    kind: super::CompilerErrorKind::FunctionNotFound(name.clone()),
+                    span: Some(ir_node.span),
+                })?;
+                self.code_asm.call(*fn_label).map_err(|e| CompilerError {
+                    kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                    span: Some(ir_node.span),
+                })?;
             }
             _ => todo!(),
         }
@@ -341,6 +445,30 @@ mod tests {
                 0x8a, 0x04, 0x24,             // mov al, byte ptr [rsp]
                 0x41, 0x88, 0x00,             // mov byte ptr [r8], al
                 0x48, 0x8d, 0x64, 0x24, 0x01, // lea rsp, [rsp+1]
+            ]
+        );
+    }
+
+    #[test]
+    fn test_translate_condition_without_body() {
+        let mut compiler = Compiler::new(64);
+        let ir_node = IrNode {
+            node: IrOp::Condition(vec![]),
+            span: Span {
+                location: (0, 0),
+                length: 1,
+            },
+        };
+        compiler
+            .translate_ir_node(ir_node)
+            .expect("Failed to translate IR node");
+        #[rustfmt::skip]
+        assert_eq!(
+            compiler.code_asm.assemble(1).unwrap(),
+            vec![
+                0x41, 0x80, 0x38, 0x00, // cmp byte ptr [r8], 0
+                0x74, 0x02,             // je 0x2 (+2)
+                0xeb, 0xf8              // jmp 0xf8 (-8)
             ]
         );
     }

@@ -23,6 +23,8 @@ pub enum CompilerErrorKind {
     AssemblerError(String),
     #[error("move left/right too large, can at most move 0x7FFFFFFF bytes at a time: {0:x}")]
     MoveTooLarge(u32),
+    #[error("function not found: '{0}'")]
+    FunctionNotFound(String),
 }
 
 pub(crate) trait CompilerTrait {
