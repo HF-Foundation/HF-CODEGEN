@@ -241,6 +241,10 @@ impl Compiler {
                         kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
                         span: Some(ir_node.span),
                     })?;
+                self.code_asm.zero_bytes().map_err(|e| CompilerError {
+                    kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                    span: Some(ir_node.span),
+                })?;
             }
             IrOp::FunctionCall(name) => {
                 let fn_label = functions.get(&name).ok_or(CompilerError {
@@ -568,6 +572,8 @@ mod tests {
         assert_eq!(
             compiler.code_asm.assemble(1).unwrap(),
             vec![
+                // jmp 0x1 (+1)
+                0xeb, 0x01,
                 // ret
                 0xc3
             ]
@@ -600,6 +606,7 @@ mod tests {
         assert_eq!(
             compiler.code_asm.assemble(1).unwrap(),
             vec![
+                0xeb, 0x05,             // jmp 0x5 (+5)
                 0x41, 0x80, 0x00, 0x01, // add byte ptr[r8b], 1
                 0xc3, // ret
             ]
@@ -641,6 +648,7 @@ mod tests {
         assert_eq!(
             compiler.code_asm.assemble(1).unwrap(),
             vec![
+                0xeb, 0x05,                    // jmp 0x5 (+5)
                 0x41, 0x80, 0x00, 0x05,        // add byte ptr[r8b], 5
                 0xc3,                          // ret
                 0xe8, 0xf6, 0xff, 0xff, 0xff,  // call 0 <hello_world>
@@ -699,8 +707,10 @@ mod tests {
         assert_eq!(
             compiler.code_asm.assemble(1).unwrap(),
             vec![
+                0xeb, 0x05,                    // jmp 0x5 (+5)
                 0x41, 0x80, 0x00, 0x05,        // add byte ptr[r8b], 5
                 0xc3,                          // ret
+                0xeb, 0x05,                    // jmp 0x5 (+5)
                 0x41, 0x80, 0x00, 0x0a,        // add byte ptr[r8b], 10
                 0xc3,                          // ret
                 0xe8, 0xf6, 0xff, 0xff, 0xff,  // call <hello_world>
@@ -743,6 +753,9 @@ mod tests {
         assert_eq!(
             compiler.code_asm.assemble(1).unwrap(),
             vec![
+                0xeb, 0x07, // jmp 0x7 (+7)
+                0xeb, 0x04, // jmp 0x4 (+4)
+                0xeb, 0x01, // jmp 0x1 (+1)
                 0xc3, // ret
                 0xc3, // ret
                 0xc3, // ret
