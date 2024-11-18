@@ -21,6 +21,8 @@ pub enum CompilerErrorKind {
     Unknown(String),
     #[error("assembler error: {0}")]
     AssemblerError(String),
+    #[error("move left/right too large, can at most move 0x7FFFFFFF bytes at a time: {0:x}")]
+    MoveTooLarge(u32),
 }
 
 pub(crate) trait CompilerTrait {

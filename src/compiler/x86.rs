@@ -27,6 +27,7 @@ impl Compiler {
         match ir_node.node {
             IrOp::Add(n) => {
                 self.code_asm
+                    // add byte ptr[r8], n
                     .add(byte_ptr(r8), n as u32)
                     .map_err(|e| CompilerError {
                         kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
@@ -35,6 +36,7 @@ impl Compiler {
             }
             IrOp::Subtract(n) => {
                 self.code_asm
+                    // sub byte ptr[r8], n
                     .sub(byte_ptr(r8), n as u32)
                     .map_err(|e| CompilerError {
                         kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
@@ -42,16 +44,84 @@ impl Compiler {
                     })?;
             }
             IrOp::MoveRight(n) => {
+                if n > 0x7FFFFFFF {
+                    return Err(CompilerError {
+                        kind: super::CompilerErrorKind::MoveTooLarge(n as u32),
+                        span: Some(ir_node.span),
+                    });
+                }
                 self.code_asm
-                    .lea(r8, byte_ptr(r8 + n as u32))
+                    // lea r8, [r8 + n]
+                    .lea(r8, dword_ptr(r8 + n as u32))
                     .map_err(|e| CompilerError {
                         kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
                         span: Some(ir_node.span),
                     })?;
             }
             IrOp::MoveLeft(n) => {
+                if n > 0x7FFFFFFF {
+                    return Err(CompilerError {
+                        kind: super::CompilerErrorKind::MoveTooLarge(n as u32),
+                        span: Some(ir_node.span),
+                    });
+                }
                 self.code_asm
-                    .lea(r8, byte_ptr(r8 - n as u32))
+                    // lea r8, [r8 - n]
+                    .lea(r8, dword_ptr(r8 - n as u32))
+                    .map_err(|e| CompilerError {
+                        kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                        span: Some(ir_node.span),
+                    })?;
+            }
+            // push byte ptr[r8]
+            //
+            // doesn't really exist, but we can do:
+            //
+            // lea  rsp,       [rsp-1]
+            // mov  al,        byte[r8]
+            // mov  byte[rsp], al
+            IrOp::StackPush => {
+                self.code_asm
+                    .lea(rsp, dword_ptr(rsp - 1))
+                    .map_err(|e| CompilerError {
+                        kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                        span: Some(ir_node.span),
+                    })?;
+                self.code_asm
+                    .mov(al, byte_ptr(r8))
+                    .map_err(|e| CompilerError {
+                        kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                        span: Some(ir_node.span),
+                    })?;
+                self.code_asm
+                    .mov(byte_ptr(rsp), al)
+                    .map_err(|e| CompilerError {
+                        kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                        span: Some(ir_node.span),
+                    })?;
+            }
+            // pop byte ptr[r8]
+            //
+            // doesn't really exist, but we can do:
+            //
+            // mov  al,        byte[rsp]
+            // mov  byte[r8],  al
+            // lea  rsp,       [rsp+1]
+            IrOp::StackPop => {
+                self.code_asm
+                    .mov(al, byte_ptr(rsp))
+                    .map_err(|e| CompilerError {
+                        kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                        span: Some(ir_node.span),
+                    })?;
+                self.code_asm
+                    .mov(byte_ptr(r8), al)
+                    .map_err(|e| CompilerError {
+                        kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                        span: Some(ir_node.span),
+                    })?;
+                self.code_asm
+                    .lea(rsp, dword_ptr(rsp + 1))
                     .map_err(|e| CompilerError {
                         kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
                         span: Some(ir_node.span),
@@ -95,7 +165,7 @@ mod tests {
     }
 
     #[test]
-    fn test_translate_ir_node_add_with_span_64() {
+    fn test_translate_ir_node_add_with_span() {
         let mut compiler = Compiler::new(64);
         let ir_node = IrNode {
             node: IrOp::Add(5),
@@ -115,7 +185,7 @@ mod tests {
     }
 
     #[test]
-    fn test_translate_sub_64() {
+    fn test_translate_sub() {
         let mut compiler = Compiler::new(64);
         let ir_node = IrNode {
             node: IrOp::Subtract(1),
@@ -182,8 +252,8 @@ mod tests {
             .expect("Failed to translate IR node");
         assert_eq!(
             compiler.code_asm.assemble(1).unwrap(),
-            // add r8, 1
-            vec![0x49, 0x83, 0xC0, 0x01]
+            // lea r8, [r8 + 1]
+            vec![0x4d, 0x8d, 0x40, 0x01]
         );
     }
 
@@ -202,8 +272,76 @@ mod tests {
             .expect("Failed to translate IR node");
         assert_eq!(
             compiler.code_asm.assemble(1).unwrap(),
-            // sub r8, 1
-            vec![0x49, 0x83, 0xE8, 0x01]
+            // lea r8, [r8 - 1]
+            vec![0x4d, 0x8d, 0x40, 0xff]
+        );
+    }
+
+    #[test]
+    fn test_translate_ir_node_move_right_32_bit_operand() {
+        let mut compiler = Compiler::new(64);
+        let ir_node = IrNode {
+            node: IrOp::MoveRight(0x7fff_ffff),
+            span: Span {
+                location: (0, 0),
+                length: 0x7fff_ffff,
+            },
+        };
+        compiler
+            .translate_ir_node(ir_node)
+            .expect("Failed to translate IR node");
+        assert_eq!(
+            compiler.code_asm.assemble(1).unwrap(),
+            // lea r8, [r8 + 0x7FFFFFFF]
+            vec![0x4d, 0x8d, 0x80, 0xff, 0xff, 0xff, 0x7f]
+        );
+    }
+
+    #[test]
+    fn test_translate_push() {
+        let mut compiler = Compiler::new(64);
+        let ir_node = IrNode {
+            node: IrOp::StackPush,
+            span: Span {
+                location: (0, 0),
+                length: 1,
+            },
+        };
+        compiler
+            .translate_ir_node(ir_node)
+            .expect("Failed to translate IR node");
+        #[rustfmt::skip]
+        assert_eq!(
+            compiler.code_asm.assemble(1).unwrap(),
+            vec![
+                0x48, 0x8d, 0x64, 0x24, 0xff, // lea rsp, [rsp-1]
+                0x41, 0x8a, 0x00,             // mov al, byte ptr [r8]
+                0x88, 0x04, 0x24,             // mov byte ptr [rsp], al
+            ]
+        );
+    }
+
+    #[test]
+    fn test_translate_pop() {
+        let mut compiler = Compiler::new(64);
+        let ir_node = IrNode {
+            node: IrOp::StackPop,
+            span: Span {
+                location: (0, 0),
+                length: 1,
+            },
+        };
+        compiler
+            .translate_ir_node(ir_node)
+            .expect("Failed to translate IR node");
+        #[rustfmt::skip]
+        assert_eq!(
+            compiler.code_asm.assemble(1).unwrap(),
+            vec![
+                0x8a, 0x04, 0x24,             // mov al, byte ptr [rsp]
+                0x41, 0x88, 0x00,             // mov byte ptr [r8], al
+                0x48, 0x8d, 0x64, 0x24, 0x01, // lea rsp, [rsp+1]
+            ]
         );
     }
 }

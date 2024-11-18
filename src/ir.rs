@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 
 use hf_parser_rust::ast::{AstNode, SyntaxNode};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Copy)]
 pub struct Span {
     pub location: (usize, usize),
     pub length: usize, // We only need the length as we can calculate the rest
