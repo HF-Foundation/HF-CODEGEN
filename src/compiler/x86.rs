@@ -24,14 +24,20 @@ impl Compiler {
     ///
     /// R8: address of the current cell
     ///     access it via `byte_ptr(r8)` aka `byte ptr[r8]`
-    fn translate_ir_node(&mut self, ir_node: IrNode) -> Result<(), CompilerError> {
-        self.translate_ir_node_impl(ir_node, HashMap::new())
+    ///
+    /// TODO: we might wanna return the hashmap here
+    fn translate_ir_node(&mut self, ir_node: Vec<IrNode>) -> Result<(), CompilerError> {
+        let mut functions = HashMap::new();
+        for node in ir_node {
+            self.translate_ir_node_impl(node, &mut functions)?;
+        }
+        Ok(())
     }
 
     fn translate_ir_node_impl(
         &mut self,
         ir_node: IrNode,
-        mut functions: HashMap<String, CodeLabel>,
+        functions: &mut HashMap<String, CodeLabel>,
     ) -> Result<(), CompilerError> {
         match ir_node.node {
             IrOp::Add(n) => {
@@ -179,9 +185,9 @@ impl Compiler {
                     span: Some(ir_node.span),
                 })?;
 
-                // now code
+                let mut scope_functions = functions.clone();
                 for cond_ir_node in cond_ir_nodes {
-                    self.translate_ir_node_impl(cond_ir_node, functions.clone())?;
+                    self.translate_ir_node_impl(cond_ir_node, &mut scope_functions)?;
                 }
 
                 self.code_asm.jmp(start_label).map_err(|e| CompilerError {
@@ -204,6 +210,10 @@ impl Compiler {
             }
             IrOp::Function(name, fn_ir_nodes) => {
                 let mut fn_label = self.code_asm.create_label();
+                self.code_asm.zero_bytes().map_err(|e| CompilerError {
+                    kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                    span: Some(ir_node.span),
+                })?;
                 self.code_asm
                     .set_label(&mut fn_label)
                     .map_err(|e| CompilerError {
@@ -213,8 +223,9 @@ impl Compiler {
                 // we dont care if the function already exists, if it does, tough luck,
                 // we're overwriting it and we're not going to check if it's the same
                 functions.insert(name.clone(), fn_label);
+                let mut scope_functions = functions.clone();
                 for fn_ir_node in fn_ir_nodes {
-                    self.translate_ir_node_impl(fn_ir_node, functions.clone())?;
+                    self.translate_ir_node_impl(fn_ir_node, &mut scope_functions)?;
                 }
                 self.code_asm.ret().map_err(|e| CompilerError {
                     kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
@@ -239,7 +250,11 @@ impl Compiler {
 
 impl super::CompilerTrait for Compiler {
     fn compile_to_bytecode(&mut self, ast: Vec<IrNode>) -> Result<Vec<u8>, CompilerError> {
-        todo!()
+        self.translate_ir_node(ast)?;
+        self.code_asm.assemble(0x1).map_err(|e| CompilerError {
+            kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+            span: None,
+        })
     }
 }
 
@@ -259,7 +274,7 @@ mod tests {
             },
         };
         compiler
-            .translate_ir_node(ir_node)
+            .translate_ir_node(vec![ir_node])
             .expect("Failed to translate IR node");
         assert_eq!(
             compiler.code_asm.assemble(1).unwrap(),
@@ -279,12 +294,34 @@ mod tests {
             },
         };
         compiler
-            .translate_ir_node(ir_node)
+            .translate_ir_node(vec![ir_node])
             .expect("Failed to translate IR node");
         assert_eq!(
             compiler.code_asm.assemble(1).unwrap(),
             // add byte ptr[r8], 5
             vec![0x41, 0x80, 0x00, 0x05]
+        );
+    }
+
+    #[test]
+    fn test_function_call_only() {
+        let mut compiler = Compiler::new(64);
+        let ir_node = IrNode {
+            node: IrOp::FunctionCall("test".to_string()),
+            span: Span {
+                location: (0, 0),
+                length: 1,
+            },
+        };
+        let mut functions = HashMap::new();
+        functions.insert("test".to_string(), compiler.code_asm.create_label());
+        compiler
+            .translate_ir_node_impl(ir_node, &mut functions)
+            .expect("Failed to translate IR node");
+        assert_eq!(
+            compiler.code_asm.assemble(1).unwrap(),
+            // call test
+            vec![0xe8, 0xfb, 0xff, 0xff, 0xff]
         );
     }
 
@@ -299,7 +336,7 @@ mod tests {
             },
         };
         compiler
-            .translate_ir_node(ir_node)
+            .translate_ir_node(vec![ir_node])
             .expect("Failed to translate IR node");
         assert_eq!(
             compiler.code_asm.assemble(1).unwrap(),
@@ -329,7 +366,7 @@ mod tests {
         ];
         for ir_node in ir_nodes {
             compiler
-                .translate_ir_node(ir_node)
+                .translate_ir_node(vec![ir_node])
                 .expect("Failed to translate IR node");
         }
         assert_eq!(
@@ -352,7 +389,7 @@ mod tests {
             },
         };
         compiler
-            .translate_ir_node(ir_node)
+            .translate_ir_node(vec![ir_node])
             .expect("Failed to translate IR node");
         assert_eq!(
             compiler.code_asm.assemble(1).unwrap(),
@@ -372,7 +409,7 @@ mod tests {
             },
         };
         compiler
-            .translate_ir_node(ir_node)
+            .translate_ir_node(vec![ir_node])
             .expect("Failed to translate IR node");
         assert_eq!(
             compiler.code_asm.assemble(1).unwrap(),
@@ -392,7 +429,7 @@ mod tests {
             },
         };
         compiler
-            .translate_ir_node(ir_node)
+            .translate_ir_node(vec![ir_node])
             .expect("Failed to translate IR node");
         assert_eq!(
             compiler.code_asm.assemble(1).unwrap(),
@@ -412,7 +449,7 @@ mod tests {
             },
         };
         compiler
-            .translate_ir_node(ir_node)
+            .translate_ir_node(vec![ir_node])
             .expect("Failed to translate IR node");
         #[rustfmt::skip]
         assert_eq!(
@@ -436,7 +473,7 @@ mod tests {
             },
         };
         compiler
-            .translate_ir_node(ir_node)
+            .translate_ir_node(vec![ir_node])
             .expect("Failed to translate IR node");
         #[rustfmt::skip]
         assert_eq!(
@@ -460,7 +497,7 @@ mod tests {
             },
         };
         compiler
-            .translate_ir_node(ir_node)
+            .translate_ir_node(vec![ir_node])
             .expect("Failed to translate IR node");
         #[rustfmt::skip]
         assert_eq!(
@@ -469,6 +506,236 @@ mod tests {
                 0x41, 0x80, 0x38, 0x00, // cmp byte ptr [r8], 0
                 0x74, 0x02,             // je 0x2 (+2)
                 0xeb, 0xf8              // jmp 0xf8 (-8)
+            ]
+        );
+    }
+
+    #[test]
+    fn test_translate_condition_with_body() {
+        let mut compiler = Compiler::new(64);
+        let ir_node = IrNode {
+            node: IrOp::Condition(vec![IrNode {
+                node: IrOp::Add(1),
+                span: Span {
+                    location: (0, 0),
+                    length: 1,
+                },
+            }]),
+            span: Span {
+                location: (0, 0),
+                length: 1,
+            },
+        };
+        compiler
+            .translate_ir_node(vec![ir_node])
+            .expect("Failed to translate IR node");
+        #[rustfmt::skip]
+        assert_eq!(
+            compiler.code_asm.assemble(1).unwrap(),
+            vec![
+                0x41, 0x80, 0x38, 0x00, // cmp byte ptr [r8], 0
+                0x74, 0x06,             // je 0x6 (+6)
+                0x41, 0x80, 0x00, 0x01, // add byte ptr[r8b], 1
+                0xeb, 0xf4              // jmp 0xf4 (-12)
+            ]
+        );
+    }
+
+    #[test]
+    fn test_translate_function() {
+        let mut compiler = Compiler::new(64);
+        let ir_node = IrNode {
+            node: IrOp::Function("hello world".to_string(), vec![]),
+            span: Span {
+                location: (0, 0),
+                length: 1,
+            },
+        };
+        compiler
+            .translate_ir_node(vec![ir_node])
+            .expect("Failed to translate IR node");
+        #[rustfmt::skip]
+        assert_eq!(
+            compiler.code_asm.assemble(1).unwrap(),
+            vec![
+                // ret
+                0xc3
+            ]
+        );
+    }
+
+    #[test]
+    fn test_translate_function_with_body() {
+        let mut compiler = Compiler::new(64);
+        let ir_node = IrNode {
+            node: IrOp::Function(
+                "hello world".to_string(),
+                vec![IrNode {
+                    node: IrOp::Add(1),
+                    span: Span {
+                        location: (0, 0),
+                        length: 1,
+                    },
+                }],
+            ),
+            span: Span {
+                location: (0, 0),
+                length: 1,
+            },
+        };
+        compiler
+            .translate_ir_node(vec![ir_node])
+            .expect("Failed to translate IR node");
+        #[rustfmt::skip]
+        assert_eq!(
+            compiler.code_asm.assemble(1).unwrap(),
+            vec![
+                0x41, 0x80, 0x00, 0x01, // add byte ptr[r8b], 1
+                0xc3, // ret
+            ]
+        );
+    }
+
+    #[test]
+    fn test_translate_function_call() {
+        let mut compiler = Compiler::new(64);
+        let ir_nodes = vec![
+            IrNode {
+                node: IrOp::Function(
+                    "hello_world".to_string(),
+                    vec![IrNode {
+                        node: IrOp::Add(5),
+                        span: Span {
+                            location: (1, 4),
+                            length: 5,
+                        },
+                    }],
+                ),
+                span: Span {
+                    location: (0, 0),
+                    length: 1,
+                },
+            },
+            IrNode {
+                node: IrOp::FunctionCall("hello_world".to_string()),
+                span: Span {
+                    location: (2, 0),
+                    length: 1,
+                },
+            },
+        ];
+        compiler
+            .translate_ir_node(ir_nodes)
+            .expect("Failed to translate IR node");
+        #[rustfmt::skip]
+        assert_eq!(
+            compiler.code_asm.assemble(1).unwrap(),
+            vec![
+                0x41, 0x80, 0x00, 0x05,        // add byte ptr[r8b], 5
+                0xc3,                          // ret
+                0xe8, 0xf6, 0xff, 0xff, 0xff,  // call 0 <hello_world>
+            ]
+        );
+    }
+
+    #[test]
+    fn test_translate_multiple_functions_with_the_same_name() {
+        let mut compiler = Compiler::new(64);
+        let ir_nodes = vec![
+            IrNode {
+                node: IrOp::Function(
+                    "hello_world".to_string(),
+                    vec![IrNode {
+                        node: IrOp::Add(5),
+                        span: Span {
+                            location: (1, 4),
+                            length: 5,
+                        },
+                    }],
+                ),
+                span: Span {
+                    location: (0, 0),
+                    length: 1,
+                },
+            },
+            IrNode {
+                node: IrOp::Function(
+                    "hello_world".to_string(),
+                    vec![IrNode {
+                        node: IrOp::Add(10),
+                        span: Span {
+                            location: (1, 4),
+                            length: 5,
+                        },
+                    }],
+                ),
+                span: Span {
+                    location: (0, 0),
+                    length: 1,
+                },
+            },
+            IrNode {
+                node: IrOp::FunctionCall("hello_world".to_string()),
+                span: Span {
+                    location: (2, 0),
+                    length: 1,
+                },
+            },
+        ];
+        compiler
+            .translate_ir_node(ir_nodes)
+            .expect("Failed to translate IR node");
+        #[rustfmt::skip]
+        assert_eq!(
+            compiler.code_asm.assemble(1).unwrap(),
+            vec![
+                0x41, 0x80, 0x00, 0x05,        // add byte ptr[r8b], 5
+                0xc3,                          // ret
+                0x41, 0x80, 0x00, 0x0a,        // add byte ptr[r8b], 10
+                0xc3,                          // ret
+                0xe8, 0xf6, 0xff, 0xff, 0xff,  // call <hello_world>
+            ]
+        );
+    }
+
+    #[test]
+    fn test_translate_nested_empty_functions() {
+        let mut compiler = Compiler::new(64);
+        let ir_nodes = vec![IrNode {
+            node: IrOp::Function(
+                "hello_world".to_string(),
+                vec![IrNode {
+                    node: IrOp::Function(
+                        "hello_world".to_string(),
+                        vec![IrNode {
+                            node: IrOp::Function("hello_world".to_string(), vec![]),
+                            span: Span {
+                                location: (0, 0),
+                                length: 1,
+                            },
+                        }],
+                    ),
+                    span: Span {
+                        location: (0, 0),
+                        length: 1,
+                    },
+                }],
+            ),
+            span: Span {
+                location: (0, 0),
+                length: 1,
+            },
+        }];
+        compiler
+            .translate_ir_node(ir_nodes)
+            .expect("Failed to translate IR node");
+        #[rustfmt::skip]
+        assert_eq!(
+            compiler.code_asm.assemble(1).unwrap(),
+            vec![
+                0xc3, // ret
+                0xc3, // ret
+                0xc3, // ret
             ]
         );
     }
