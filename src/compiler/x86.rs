@@ -210,10 +210,14 @@ impl Compiler {
             }
             IrOp::Function(name, fn_ir_nodes) => {
                 let mut fn_label = self.code_asm.create_label();
-                self.code_asm.zero_bytes().map_err(|e| CompilerError {
-                    kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
-                    span: Some(ir_node.span),
-                })?;
+                let mut skip_fn_label = self.code_asm.create_label();
+
+                self.code_asm
+                    .jmp(skip_fn_label)
+                    .map_err(|e| CompilerError {
+                        kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                        span: Some(ir_node.span),
+                    })?;
                 self.code_asm
                     .set_label(&mut fn_label)
                     .map_err(|e| CompilerError {
@@ -231,6 +235,12 @@ impl Compiler {
                     kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
                     span: Some(ir_node.span),
                 })?;
+                self.code_asm
+                    .set_label(&mut skip_fn_label)
+                    .map_err(|e| CompilerError {
+                        kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                        span: Some(ir_node.span),
+                    })?;
             }
             IrOp::FunctionCall(name) => {
                 let fn_label = functions.get(&name).ok_or(CompilerError {
