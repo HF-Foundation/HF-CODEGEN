@@ -35,6 +35,7 @@ pub enum IrOp {
     MoveLeft(usize),
     StackPush,
     StackPop,
+    MemAlloc(usize),
     Function(String, Vec<IrNode>),
     FunctionCall(String),
     Asm(String),
@@ -76,6 +77,14 @@ impl IrOp {
                     false
                 }
             }
+            Self::MemAlloc(n) => {
+                if let SyntaxNode::MemAlloc(n2) = op {
+                    *n += *n2;
+                    true
+                } else {
+                    false
+                }
+            }
             _ => false, // These cannot be extended regardless
         }
     }
@@ -89,8 +98,7 @@ pub struct IrNode {
 
 impl core::fmt::Debug for IrNode {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        if f.alternate()
-            && matches!(self.node, IrOp::Function(_, _))
+        if f.alternate() && matches!(self.node, IrOp::Function(_, _))
             || matches!(self.node, IrOp::Condition(_))
         {
             write!(
@@ -144,6 +152,7 @@ impl IrBuilder {
                 SyntaxNode::MoveLeft => IrOp::MoveLeft(1),
                 SyntaxNode::StackPush => IrOp::StackPush,
                 SyntaxNode::StackPop => IrOp::StackPop,
+                SyntaxNode::MemAlloc(n) => IrOp::MemAlloc(n),
                 SyntaxNode::Function(name, args) => IrOp::Function(name, from_ast(args)),
                 SyntaxNode::FuncCall(name) => IrOp::FunctionCall(name),
                 SyntaxNode::Asm(code) => IrOp::Asm(code),
@@ -278,6 +287,50 @@ mod tests {
                     length: 1,
                 },
             }]
+        );
+    }
+
+    #[test]
+    fn test_from_ast_with_mem_alloc() {
+        let ast = vec![AstNode {
+            node: SyntaxNode::MemAlloc(10),
+            location: (0, 0),
+        }];
+        let ir = from_ast(ast);
+        assert_eq!(
+            ir,
+            vec![IrNode {
+                node: IrOp::MemAlloc(10),
+                span: Span {
+                    location: (0, 0),
+                    length: 1,
+                },
+            }]
+        );
+    }
+
+    #[test]
+    fn test_from_ast_with_multiple_mem_alloc() {
+        let ast = vec![
+            AstNode {
+                node: SyntaxNode::MemAlloc(10),
+                location: (0, 0),
+            },
+            AstNode {
+                node: SyntaxNode::MemAlloc(20),
+                location: (0, 1),
+            },
+        ];
+        let ir = from_ast(ast);
+        assert_eq!(
+            ir,
+            vec![IrNode {
+                node: IrOp::MemAlloc(30),
+                span: Span {
+                    location: (0, 0),
+                    length: 2,
+                },
+            },]
         );
     }
 }
