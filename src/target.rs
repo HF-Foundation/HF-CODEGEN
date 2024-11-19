@@ -1,3 +1,4 @@
+#[derive(Debug)]
 pub enum Arch {
     X86,
     X86_64,
@@ -17,12 +18,14 @@ pub enum Arch {
     RiscV128,
 }
 
+#[derive(Debug)]
 pub enum CallingConvention {
     SystemV,
     MicrosoftX64,
     Cdecl,
 }
 
+#[derive(Debug)]
 pub enum Os {
     BareMetal,
     Windows,
@@ -51,6 +54,7 @@ impl Os {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct Target {
     pub arch: Arch,
     pub calling_convention: CallingConvention,
