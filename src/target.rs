@@ -35,6 +35,22 @@ pub enum Os {
     Theseus,
 }
 
+impl Os {
+    pub fn calling_convention(&self) -> CallingConvention {
+        match self {
+            Os::Windows => CallingConvention::MicrosoftX64,
+            Os::Linux => CallingConvention::SystemV,
+            Os::Bsd => CallingConvention::SystemV,
+            Os::Solaris => CallingConvention::SystemV,
+            Os::Illumos => CallingConvention::SystemV,
+            Os::Haiku => CallingConvention::SystemV,
+            Os::Redox => CallingConvention::SystemV,
+            Os::Theseus => CallingConvention::SystemV,
+            Os::BareMetal => CallingConvention::Cdecl,
+        }
+    }
+}
+
 pub struct Target {
     pub arch: Arch,
     pub calling_convention: CallingConvention,
