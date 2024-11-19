@@ -1,4 +1,4 @@
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Arch {
     X86,
     X86_64,
@@ -18,14 +18,14 @@ pub enum Arch {
     RiscV128,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum CallingConvention {
     SystemV,
     MicrosoftX64,
     Cdecl,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Os {
     BareMetal,
     Windows,
