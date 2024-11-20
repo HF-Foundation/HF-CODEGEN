@@ -43,41 +43,13 @@ impl Compiler {
         Ok(())
     }
 
-    fn generate_memory_alloc_syscall(&mut self, size: u64) -> Result<(), IcedError> {
-        // To allocate memory in Windows via syscall (in assembly), you can use the `NtAllocateVirtualMemory` function.
-        // Here's a general outline of how you might do it:
-        //
-        // 1. Set up the syscall number for `NtAllocateVirtualMemory` in the `eax` register.
-        //    The syscall number for `NtAllocateVirtualMemory` is 0x18 (24 in decimal).
-        // 2. Set up the arguments for the syscall in the appropriate registers:
-        //    - `HANDLE ProcessHandle` (usually `-1` for the current process) in `rcx`.
-        //    - `PVOID *BaseAddress` (pointer to the base address of the allocated region) in `rdx`.
-        //    - `ULONG_PTR ZeroBits` (number of high-order address bits that must be zero) in `r8`.
-        //    - `PSIZE_T RegionSize` (pointer to the size of the region to allocate) in `r9`.
-        //    - `ULONG AllocationType` (type of memory allocation) in the stack.
-        //    - `ULONG Protect` (memory protection for the region) in the stack.
-        // 3. Make the syscall using the `syscall` instruction.
-        // 4. Check the return value in `eax` for success or failure.
-
-        // syscall number
-        self.code_asm.mov(eax, 0x18u32)?;
-        // process handle (-1 = this process)
-        self.code_asm.mov(rcx, -1i64)?;
-        // base address (null)
-        self.code_asm.mov(rdx, 0u64)?;
-        // zero bits (ignored)
-        self.code_asm.mov(r8, 0u64)?;
-        // how much to allocate
-        self.code_asm.mov(r9, size)?;
-        // now push arguments, right-to-left
-        // push protect PAGE_READWRITE
-        self.code_asm.push(0x04)?;
-        // push MEM_COMMIT | MEM_RESERVE
-        self.code_asm.push(0x00001000 | 0x00002000)?;
-        // syscall
-        self.code_asm.syscall()?;
-        self.code_asm.mov(r8, rax)?;
-
+    fn generate_memory_alloc_syscall(&mut self, size: u32) -> Result<(), IcedError> {
+        self.code_asm.mov(r9d, 4)?;
+        self.code_asm.mov(r8d, 0x00001000 | 0x00002000)?;
+        self.code_asm.mov(edx, size)?;
+        self.code_asm.xor(ecx, ecx)?;
+        // TODO: call VirtualAlloc
+        // TODO: `rax` has the result ptr or some error (ignore error)
         Ok(())
     }
 
