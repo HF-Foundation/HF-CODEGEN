@@ -75,7 +75,7 @@ impl Default for CompilerSettings {
     fn default() -> Self {
         Self {
             optimization_level: 0,
-            base_address: 0xffff,
+            base_address: 0,
         }
     }
 }

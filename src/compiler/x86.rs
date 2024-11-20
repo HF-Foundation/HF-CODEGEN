@@ -441,11 +441,20 @@ impl super::CompilerTrait for Compiler {
         let _fn_offset =
             obj.add_symbol_data(fn_symbol, text_section, &result.inner.code_buffer, 16);
 
+        // Update the IP for our start symbol
+        let label = functions
+            .get(&"_start".to_string())
+            .expect("couldnt find function label for _start");
+        let ip = result
+            .label_ip(label)
+            .expect("couldnt find label ip for _start");
+        obj.set_symbol_data(fn_symbol, text_section, ip, 0);
+
+        // Update the IP for symbols
         for (name, symbol_id) in fn_symbol_map {
             let label = functions.get(&name).expect("couldnt find function label");
             let ip = result.label_ip(label).expect("couldnt find label ip");
-            let symbol = obj.symbol_mut(symbol_id);
-            symbol.value = ip as u64;
+            obj.set_symbol_data(symbol_id, text_section, ip, 0);
         }
 
         Ok(obj)
