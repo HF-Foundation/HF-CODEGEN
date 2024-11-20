@@ -91,7 +91,7 @@ impl Target {
         #[cfg(target_os = "linux")]
         return Self {
             arch: Arch::X86_64,
-            calling_convention: CallingConvention::SystemV,
+            calling_convention: CallingConvention::from_arch_os(Arch::X86_64, Os::Linux),
         };
 
         #[cfg(not(any(target_os = "windows", target_os = "linux")))]

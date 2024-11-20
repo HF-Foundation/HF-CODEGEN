@@ -4,17 +4,26 @@ use alloc::vec::Vec;
 use hashbrown::HashMap;
 use iced_x86::code_asm::{CodeLabel, *};
 
-use super::CompilerError;
+use super::{CompilerError, CompilerSettings};
 use crate::ir::{IrNode, IrOp};
+use crate::target::CallingConvention;
 
 pub struct Compiler {
     code_asm: CodeAssembler,
+    calling_convention: CallingConvention,
+    settings: CompilerSettings,
 }
 
 impl Compiler {
-    pub fn new(bitness: u32) -> Self {
+    pub fn new(
+        bitness: u32,
+        compiler_settings: CompilerSettings,
+        calling_convention: CallingConvention,
+    ) -> Self {
         Self {
             code_asm: CodeAssembler::new(bitness).unwrap(),
+            calling_convention,
+            settings: compiler_settings,
         }
     }
 
@@ -264,22 +273,37 @@ impl Compiler {
 
 impl super::CompilerTrait for Compiler {
     fn compile_to_bytecode(&mut self, ast: Vec<IrNode>) -> Result<Vec<u8>, CompilerError> {
+        self.generate_memory_alloc_syscall(1024)
+            .map_err(|e| CompilerError {
+                kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                span: None,
+            })?;
         self.translate_ir_node(ast)?;
-        self.code_asm.assemble(0x1).map_err(|e| CompilerError {
-            kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
-            span: None,
-        })
+        self.code_asm
+            .assemble(self.settings.base_address)
+            .map_err(|e| CompilerError {
+                kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                span: None,
+            })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::Span;
+    use crate::{ir::Span, target::Target};
+
+    fn get_compiler() -> Compiler {
+        Compiler::new(
+            64,
+            CompilerSettings::default(),
+            Target::native().calling_convention,
+        )
+    }
 
     #[test]
     fn test_translate_ir_node_add() {
-        let mut compiler = Compiler::new(64);
+        let mut compiler = get_compiler();
         let ir_node = IrNode {
             node: IrOp::Add(1),
             span: Span {
@@ -299,7 +323,7 @@ mod tests {
 
     #[test]
     fn test_translate_ir_node_add_with_span() {
-        let mut compiler = Compiler::new(64);
+        let mut compiler = get_compiler();
         let ir_node = IrNode {
             node: IrOp::Add(5),
             span: Span {
@@ -319,7 +343,7 @@ mod tests {
 
     #[test]
     fn test_function_call_only() {
-        let mut compiler = Compiler::new(64);
+        let mut compiler = get_compiler();
         let ir_node = IrNode {
             node: IrOp::FunctionCall("test".to_string()),
             span: Span {
@@ -341,7 +365,7 @@ mod tests {
 
     #[test]
     fn test_translate_sub() {
-        let mut compiler = Compiler::new(64);
+        let mut compiler = get_compiler();
         let ir_node = IrNode {
             node: IrOp::Subtract(1),
             span: Span {
@@ -361,7 +385,7 @@ mod tests {
 
     #[test]
     fn test_translate_multiple_nodes() {
-        let mut compiler = Compiler::new(64);
+        let mut compiler = get_compiler();
         let ir_nodes = vec![
             IrNode {
                 node: IrOp::Add(1),
@@ -394,7 +418,7 @@ mod tests {
 
     #[test]
     fn test_translate_ir_node_move_right() {
-        let mut compiler = Compiler::new(64);
+        let mut compiler = get_compiler();
         let ir_node = IrNode {
             node: IrOp::MoveRight(1),
             span: Span {
@@ -414,7 +438,7 @@ mod tests {
 
     #[test]
     fn test_translate_ir_node_move_left() {
-        let mut compiler = Compiler::new(64);
+        let mut compiler = get_compiler();
         let ir_node = IrNode {
             node: IrOp::MoveLeft(1),
             span: Span {
@@ -434,7 +458,7 @@ mod tests {
 
     #[test]
     fn test_translate_ir_node_move_right_32_bit_operand() {
-        let mut compiler = Compiler::new(64);
+        let mut compiler = get_compiler();
         let ir_node = IrNode {
             node: IrOp::MoveRight(0x7fff_ffff),
             span: Span {
@@ -454,7 +478,7 @@ mod tests {
 
     #[test]
     fn test_translate_push() {
-        let mut compiler = Compiler::new(64);
+        let mut compiler = get_compiler();
         let ir_node = IrNode {
             node: IrOp::StackPush,
             span: Span {
@@ -478,7 +502,7 @@ mod tests {
 
     #[test]
     fn test_translate_pop() {
-        let mut compiler = Compiler::new(64);
+        let mut compiler = get_compiler();
         let ir_node = IrNode {
             node: IrOp::StackPop,
             span: Span {
@@ -502,7 +526,7 @@ mod tests {
 
     #[test]
     fn test_translate_condition_without_body() {
-        let mut compiler = Compiler::new(64);
+        let mut compiler = get_compiler();
         let ir_node = IrNode {
             node: IrOp::Condition(vec![]),
             span: Span {
@@ -526,7 +550,7 @@ mod tests {
 
     #[test]
     fn test_translate_condition_with_body() {
-        let mut compiler = Compiler::new(64);
+        let mut compiler = get_compiler();
         let ir_node = IrNode {
             node: IrOp::Condition(vec![IrNode {
                 node: IrOp::Add(1),
@@ -557,7 +581,7 @@ mod tests {
 
     #[test]
     fn test_translate_function() {
-        let mut compiler = Compiler::new(64);
+        let mut compiler = get_compiler();
         let ir_node = IrNode {
             node: IrOp::Function("hello world".to_string(), vec![]),
             span: Span {
@@ -582,7 +606,7 @@ mod tests {
 
     #[test]
     fn test_translate_function_with_body() {
-        let mut compiler = Compiler::new(64);
+        let mut compiler = get_compiler();
         let ir_node = IrNode {
             node: IrOp::Function(
                 "hello world".to_string(),
@@ -615,7 +639,7 @@ mod tests {
 
     #[test]
     fn test_translate_function_call() {
-        let mut compiler = Compiler::new(64);
+        let mut compiler = get_compiler();
         let ir_nodes = vec![
             IrNode {
                 node: IrOp::Function(
@@ -658,7 +682,7 @@ mod tests {
 
     #[test]
     fn test_translate_multiple_functions_with_the_same_name() {
-        let mut compiler = Compiler::new(64);
+        let mut compiler = get_compiler();
         let ir_nodes = vec![
             IrNode {
                 node: IrOp::Function(
@@ -720,7 +744,7 @@ mod tests {
 
     #[test]
     fn test_translate_nested_empty_functions() {
-        let mut compiler = Compiler::new(64);
+        let mut compiler = get_compiler();
         let ir_nodes = vec![IrNode {
             node: IrOp::Function(
                 "hello_world".to_string(),

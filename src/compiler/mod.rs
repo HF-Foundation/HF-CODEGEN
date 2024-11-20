@@ -36,10 +36,10 @@ pub struct HfCompiler {
 }
 
 impl HfCompiler {
-    pub fn from_target(target: Target) -> Self {
+    pub fn new(target: Target, compiler_settings: CompilerSettings) -> Self {
         let compiler = match target.arch {
-            Arch::X86 => Box::new(x86::Compiler::new(32)),
-            Arch::X86_64 => Box::new(x86::Compiler::new(64)),
+            Arch::X86 => Box::new(x86::Compiler::new(32, compiler_settings, target.calling_convention)),
+            Arch::X86_64 => Box::new(x86::Compiler::new(64, compiler_settings, target.calling_convention)),
             _ => unimplemented!(),
         };
 
@@ -48,5 +48,19 @@ impl HfCompiler {
 
     pub fn compile_to_bytecode(&mut self, ast: Vec<IrNode>) -> Result<Vec<u8>, CompilerError> {
         self.compiler.compile_to_bytecode(ast)
+    }
+}
+
+pub struct CompilerSettings {
+    pub optimization_level: u8,
+    pub base_address: u64,
+}
+
+impl Default for CompilerSettings {
+    fn default() -> Self {
+        Self {
+            optimization_level: 0,
+            base_address: 0xffff,
+        }
     }
 }
