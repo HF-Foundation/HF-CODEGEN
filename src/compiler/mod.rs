@@ -25,10 +25,17 @@ pub enum CompilerErrorKind {
     MoveTooLarge(u32),
     #[error("function not found: '{0}'")]
     FunctionNotFound(String),
+
+    #[error("relocation failed: '{0}'")]
+    RelocationFailed(String),
 }
 
 pub(crate) trait CompilerTrait {
     fn compile_to_bytecode(&mut self, ast: Vec<IrNode>) -> Result<Vec<u8>, CompilerError>;
+    fn compile_to_object_file(
+        &mut self,
+        ast: Vec<IrNode>,
+    ) -> Result<object::write::Object, CompilerError>;
 }
 
 pub struct HfCompiler {
@@ -38,8 +45,16 @@ pub struct HfCompiler {
 impl HfCompiler {
     pub fn new(target: Target, compiler_settings: CompilerSettings) -> Self {
         let compiler = match target.arch {
-            Arch::X86 => Box::new(x86::Compiler::new(32, compiler_settings, target.calling_convention)),
-            Arch::X86_64 => Box::new(x86::Compiler::new(64, compiler_settings, target.calling_convention)),
+            Arch::X86 => Box::new(x86::Compiler::new(
+                32,
+                compiler_settings,
+                target.calling_convention,
+            )),
+            Arch::X86_64 => Box::new(x86::Compiler::new(
+                64,
+                compiler_settings,
+                target.calling_convention,
+            )),
             _ => unimplemented!(),
         };
 

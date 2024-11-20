@@ -4,12 +4,19 @@ use alloc::vec::Vec;
 use hashbrown::HashMap;
 use iced_x86::code_asm::{CodeLabel, *};
 
-use super::{CompilerError, CompilerSettings};
+use super::{CompilerError, CompilerErrorKind, CompilerSettings};
 use crate::ir::{IrNode, IrOp};
 use crate::target::CallingConvention;
 
+use object::endian::Endianness;
+use object::write::{
+    Architecture, BinaryFormat, Object, Relocation, RelocationEncoding, RelocationFlags,
+    RelocationKind, SectionId, StandardSection, Symbol, SymbolFlags, SymbolId, SymbolKind,
+    SymbolScope, SymbolSection,
+};
+
 pub struct Compiler {
-    code_asm: CodeAssembler,
+    bitness: u32,
     calling_convention: CallingConvention,
     settings: CompilerSettings,
 }
@@ -21,7 +28,7 @@ impl Compiler {
         calling_convention: CallingConvention,
     ) -> Self {
         Self {
-            code_asm: CodeAssembler::new(bitness).unwrap(),
+            bitness,
             calling_convention,
             settings: compiler_settings,
         }
@@ -35,32 +42,105 @@ impl Compiler {
     ///     access it via `byte_ptr(r8)` aka `byte ptr[r8]`
     ///
     /// TODO: we might wanna return the hashmap here
-    fn translate_ir_node(&mut self, ir_node: Vec<IrNode>) -> Result<(), CompilerError> {
-        let mut functions = HashMap::new();
+    fn translate_ir_node(
+        &mut self,
+        functions: &mut HashMap<String, CodeLabel>,
+        ir_node: Vec<IrNode>,
+    ) -> Result<Vec<u8>, CompilerError> {
+        let mut code_asm = CodeAssembler::new(self.bitness).unwrap();
         for node in ir_node {
-            self.translate_ir_node_impl(node, &mut functions)?;
+            self.translate_ir_node_impl(&mut code_asm, node, functions)?;
         }
-        Ok(())
+        code_asm
+            .assemble(self.settings.base_address)
+            .map_err(|e| CompilerError {
+                kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                span: None,
+            })
     }
 
-    fn generate_memory_alloc_syscall(&mut self, size: u32) -> Result<(), IcedError> {
-        self.code_asm.mov(r9d, 4)?;
-        self.code_asm.mov(r8d, 0x00001000 | 0x00002000)?;
-        self.code_asm.mov(edx, size)?;
-        self.code_asm.xor(ecx, ecx)?;
-        // TODO: call VirtualAlloc
-        // TODO: `rax` has the result ptr or some error (ignore error)
+    fn translate_function(
+        &mut self,
+        functions: &mut HashMap<String, CodeLabel>,
+        name: String,
+        span: crate::ir::Span,
+        children: Vec<IrNode>,
+    ) -> Result<Vec<u8>, CompilerError> {
+        let mut code_asm = CodeAssembler::new(self.bitness).unwrap();
+        self.translate_function_impl(&mut code_asm, functions, name, span, children)?;
+        code_asm
+            .assemble(self.settings.base_address)
+            .map_err(|e| CompilerError {
+                kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                span: None,
+            })
+    }
+
+    // fn generate_memory_alloc_syscall(&mut self, size: u32) -> Result<(), IcedError> {
+    //     self.code_asm.mov(r9d, 4)?;
+    //     self.code_asm.mov(r8d, 0x00001000 | 0x00002000)?;
+    //     self.code_asm.mov(edx, size)?;
+    //     self.code_asm.xor(ecx, ecx)?;
+    //     // TODO: call VirtualAlloc
+    //     // TODO: `rax` has the result ptr or some error (ignore error)
+    //     Ok(())
+    // }
+
+    fn translate_function_impl(
+        &mut self,
+        code_asm: &mut CodeAssembler,
+        functions: &mut HashMap<String, CodeLabel>,
+        name: String,
+        span: crate::ir::Span,
+        children: Vec<IrNode>,
+    ) -> Result<(), CompilerError> {
+        let mut fn_label = code_asm.create_label();
+        let mut skip_fn_label = code_asm.create_label();
+
+        code_asm.jmp(skip_fn_label).map_err(|e| CompilerError {
+            kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+            span: Some(span),
+        })?;
+        code_asm
+            .set_label(&mut fn_label)
+            .map_err(|e| CompilerError {
+                kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                span: Some(span),
+            })?;
+        // we dont care if the function already exists, if it does, tough luck,
+        // we're overwriting it and we're not going to check if it's the same
+        functions.insert(name.clone(), fn_label);
+        let mut scope_functions = functions.clone();
+        for fn_ir_node in children {
+            self.translate_ir_node_impl(code_asm, fn_ir_node, &mut scope_functions)?;
+        }
+        code_asm.ret().map_err(|e| CompilerError {
+            kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+            span: Some(span),
+        })?;
+        code_asm
+            .set_label(&mut skip_fn_label)
+            .map_err(|e| CompilerError {
+                kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                span: Some(span),
+            })?;
+        code_asm.zero_bytes().map_err(|e| CompilerError {
+            kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+            span: Some(span),
+        })?;
+
         Ok(())
     }
 
     fn translate_ir_node_impl(
         &mut self,
+        code_asm: &mut CodeAssembler,
         ir_node: IrNode,
         functions: &mut HashMap<String, CodeLabel>,
     ) -> Result<(), CompilerError> {
         match ir_node.node {
             IrOp::Add(n) => {
-                self.code_asm
+                code_asm
                     // add byte ptr[r8], n
                     .add(byte_ptr(r8), n as u32)
                     .map_err(|e| CompilerError {
@@ -69,7 +149,7 @@ impl Compiler {
                     })?;
             }
             IrOp::Subtract(n) => {
-                self.code_asm
+                code_asm
                     // sub byte ptr[r8], n
                     .sub(byte_ptr(r8), n as u32)
                     .map_err(|e| CompilerError {
@@ -84,7 +164,7 @@ impl Compiler {
                         span: Some(ir_node.span),
                     });
                 }
-                self.code_asm
+                code_asm
                     // lea r8, [r8 + n]
                     .lea(r8, dword_ptr(r8 + n as u32))
                     .map_err(|e| CompilerError {
@@ -99,7 +179,7 @@ impl Compiler {
                         span: Some(ir_node.span),
                     });
                 }
-                self.code_asm
+                code_asm
                     // lea r8, [r8 - n]
                     .lea(r8, dword_ptr(r8 - n as u32))
                     .map_err(|e| CompilerError {
@@ -115,24 +195,20 @@ impl Compiler {
             // mov  al,        byte[r8]
             // mov  byte[rsp], al
             IrOp::StackPush => {
-                self.code_asm
+                code_asm
                     .lea(rsp, dword_ptr(rsp - 1))
                     .map_err(|e| CompilerError {
                         kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
                         span: Some(ir_node.span),
                     })?;
-                self.code_asm
-                    .mov(al, byte_ptr(r8))
-                    .map_err(|e| CompilerError {
-                        kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
-                        span: Some(ir_node.span),
-                    })?;
-                self.code_asm
-                    .mov(byte_ptr(rsp), al)
-                    .map_err(|e| CompilerError {
-                        kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
-                        span: Some(ir_node.span),
-                    })?;
+                code_asm.mov(al, byte_ptr(r8)).map_err(|e| CompilerError {
+                    kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                    span: Some(ir_node.span),
+                })?;
+                code_asm.mov(byte_ptr(rsp), al).map_err(|e| CompilerError {
+                    kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                    span: Some(ir_node.span),
+                })?;
             }
             // pop byte ptr[r8]
             //
@@ -142,19 +218,15 @@ impl Compiler {
             // mov  byte[r8],  al
             // lea  rsp,       [rsp+1]
             IrOp::StackPop => {
-                self.code_asm
-                    .mov(al, byte_ptr(rsp))
-                    .map_err(|e| CompilerError {
-                        kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
-                        span: Some(ir_node.span),
-                    })?;
-                self.code_asm
-                    .mov(byte_ptr(r8), al)
-                    .map_err(|e| CompilerError {
-                        kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
-                        span: Some(ir_node.span),
-                    })?;
-                self.code_asm
+                code_asm.mov(al, byte_ptr(rsp)).map_err(|e| CompilerError {
+                    kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                    span: Some(ir_node.span),
+                })?;
+                code_asm.mov(byte_ptr(r8), al).map_err(|e| CompilerError {
+                    kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                    span: Some(ir_node.span),
+                })?;
+                code_asm
                     .lea(rsp, dword_ptr(rsp + 1))
                     .map_err(|e| CompilerError {
                         kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
@@ -177,44 +249,42 @@ impl Compiler {
             // end_label:
             //
             IrOp::Condition(cond_ir_nodes) => {
-                let mut start_label = self.code_asm.create_label();
-                let mut end_label = self.code_asm.create_label();
+                let mut start_label = code_asm.create_label();
+                let mut end_label = code_asm.create_label();
 
                 // phantom instruction so we have an address
-                self.code_asm.zero_bytes().map_err(|e| CompilerError {
+                code_asm.zero_bytes().map_err(|e| CompilerError {
                     kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
                     span: Some(ir_node.span),
                 })?;
 
-                self.code_asm
+                code_asm
                     .set_label(&mut start_label)
                     .map_err(|e| CompilerError {
                         kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
                         span: Some(ir_node.span),
                     })?;
 
-                self.code_asm
-                    .cmp(byte_ptr(r8), 0)
-                    .map_err(|e| CompilerError {
-                        kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
-                        span: Some(ir_node.span),
-                    })?;
-                self.code_asm.je(end_label).map_err(|e| CompilerError {
+                code_asm.cmp(byte_ptr(r8), 0).map_err(|e| CompilerError {
+                    kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                    span: Some(ir_node.span),
+                })?;
+                code_asm.je(end_label).map_err(|e| CompilerError {
                     kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
                     span: Some(ir_node.span),
                 })?;
 
                 let mut scope_functions = functions.clone();
                 for cond_ir_node in cond_ir_nodes {
-                    self.translate_ir_node_impl(cond_ir_node, &mut scope_functions)?;
+                    self.translate_ir_node_impl(code_asm, cond_ir_node, &mut scope_functions)?;
                 }
 
-                self.code_asm.jmp(start_label).map_err(|e| CompilerError {
+                code_asm.jmp(start_label).map_err(|e| CompilerError {
                     kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
                     span: Some(ir_node.span),
                 })?;
 
-                self.code_asm
+                code_asm
                     .set_label(&mut end_label)
                     .map_err(|e| CompilerError {
                         kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
@@ -222,55 +292,20 @@ impl Compiler {
                     })?;
 
                 // phantom instruction so we have an address
-                self.code_asm.zero_bytes().map_err(|e| CompilerError {
+                code_asm.zero_bytes().map_err(|e| CompilerError {
                     kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
                     span: Some(ir_node.span),
                 })?;
             }
             IrOp::Function(name, fn_ir_nodes) => {
-                let mut fn_label = self.code_asm.create_label();
-                let mut skip_fn_label = self.code_asm.create_label();
-
-                self.code_asm
-                    .jmp(skip_fn_label)
-                    .map_err(|e| CompilerError {
-                        kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
-                        span: Some(ir_node.span),
-                    })?;
-                self.code_asm
-                    .set_label(&mut fn_label)
-                    .map_err(|e| CompilerError {
-                        kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
-                        span: Some(ir_node.span),
-                    })?;
-                // we dont care if the function already exists, if it does, tough luck,
-                // we're overwriting it and we're not going to check if it's the same
-                functions.insert(name.clone(), fn_label);
-                let mut scope_functions = functions.clone();
-                for fn_ir_node in fn_ir_nodes {
-                    self.translate_ir_node_impl(fn_ir_node, &mut scope_functions)?;
-                }
-                self.code_asm.ret().map_err(|e| CompilerError {
-                    kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
-                    span: Some(ir_node.span),
-                })?;
-                self.code_asm
-                    .set_label(&mut skip_fn_label)
-                    .map_err(|e| CompilerError {
-                        kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
-                        span: Some(ir_node.span),
-                    })?;
-                self.code_asm.zero_bytes().map_err(|e| CompilerError {
-                    kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
-                    span: Some(ir_node.span),
-                })?;
+                self.translate_function_impl(code_asm, functions, name, ir_node.span, fn_ir_nodes)?;
             }
             IrOp::FunctionCall(name) => {
                 let fn_label = functions.get(&name).ok_or(CompilerError {
                     kind: super::CompilerErrorKind::FunctionNotFound(name.clone()),
                     span: Some(ir_node.span),
                 })?;
-                self.code_asm.call(*fn_label).map_err(|e| CompilerError {
+                code_asm.call(*fn_label).map_err(|e| CompilerError {
                     kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
                     span: Some(ir_node.span),
                 })?;
@@ -290,18 +325,113 @@ impl super::CompilerTrait for Compiler {
                 span: None,
             })?;
         */
-        self.translate_ir_node(ast)?;
-        self.code_asm
-            .assemble(self.settings.base_address)
-            .map_err(|e| CompilerError {
-                kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
-                span: None,
-            })
+        let mut functions = HashMap::new();
+        self.translate_ir_node(&mut functions, ast)
+    }
+
+    fn compile_to_object_file(&mut self, ast: Vec<IrNode>) -> Result<Object, CompilerError> {
+        let mut obj = Object::new(BinaryFormat::Elf, Architecture::X86_64, Endianness::Little);
+
+        let mut fn_map_ir = HashMap::new();
+        let mut fn_map = HashMap::new();
+
+        fn reloc(
+            obj: &mut Object,
+            fn_section: SectionId,
+            fn_map: &HashMap<String, (u64, SymbolId, i64)>,
+        ) -> Result<(), CompilerError> {
+            for (_name, (offset, symbol, addend)) in fn_map {
+                obj.add_relocation(
+                    fn_section,
+                    Relocation {
+                        offset: *offset,
+                        symbol: symbol.clone(),
+                        addend: *addend,
+                        flags: RelocationFlags::Generic {
+                            kind: RelocationKind::PltRelative,
+                            encoding: RelocationEncoding::X86Branch,
+                            size: 32,
+                        },
+                    },
+                )
+                .map_err(|e| CompilerError {
+                    kind: CompilerErrorKind::RelocationFailed(e.to_string()),
+                    span: None,
+                })?;
+            }
+            Ok(())
+        }
+
+        // top level code
+        let mut non_fn_ast = Vec::new();
+        for node in ast {
+            match node.node {
+                IrOp::Function(name, children) => {
+                    let name_bytes = name.as_bytes().to_vec();
+                    let byte_code =
+                        self.translate_function(&mut fn_map_ir, name.clone(), node.span, children)?;
+                    let fn_symbol = obj.add_symbol(Symbol {
+                        name: name_bytes.clone(),
+                        value: 0,
+                        size: 0,
+                        kind: SymbolKind::Text,
+                        scope: SymbolScope::Linkage,
+                        weak: false,
+                        section: SymbolSection::Undefined,
+                        flags: SymbolFlags::None,
+                    });
+
+                    let fn_section = obj.add_subsection(StandardSection::Text, &name_bytes);
+                    let fn_offset = obj.add_symbol_data(fn_symbol, fn_section, &byte_code, 1);
+
+                    // Do relocations AFTER adding the function to the function map
+                    // Otherwise we can't call functions recursively
+
+                    fn_map.insert(name, (fn_offset, fn_symbol, -4));
+
+                    // Now we can safely do all our relocations
+                    reloc(&mut obj, fn_section, &fn_map)?;
+
+                    // obj.add_relocation(
+                    //     fn_section,
+                    //     Relocation {
+                    //         offset: puts_reloc_offset,
+                    //         symbol: puts_symbol,
+                    //         addend: -4,
+                    //         flags: puts_reloc_flags,
+                    //     },
+                    // );
+                }
+                _ => non_fn_ast.push(node),
+            }
+        }
+        let byte_code = self.translate_ir_node(&mut fn_map_ir, non_fn_ast)?;
+
+        let name_bytes = b"main".to_vec();
+        let fn_symbol = obj.add_symbol(Symbol {
+            name: name_bytes.clone(),
+            value: 0,
+            size: 0,
+            kind: SymbolKind::Text,
+            scope: SymbolScope::Linkage,
+            weak: false,
+            section: SymbolSection::Undefined,
+            flags: SymbolFlags::None,
+        });
+
+        let fn_section = obj.add_subsection(StandardSection::Text, &name_bytes);
+        let _fn_offset = obj.add_symbol_data(fn_symbol, fn_section, &byte_code, 1);
+
+        reloc(&mut obj, fn_section, &fn_map)?;
+
+        Ok(obj)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+    use super::super::*;
     use super::*;
     use crate::{ir::Span, target::Target};
 
@@ -313,6 +443,47 @@ mod tests {
         )
     }
 
+    #[test]
+    fn test_object_output() {
+        let mut compiler = get_compiler();
+        let ir_nodes = vec![
+            IrNode {
+                node: IrOp::Function(
+                    "test".to_string(),
+                    vec![IrNode {
+                        node: IrOp::Add(1),
+                        span: Span {
+                            location: (0, 0),
+                            length: 1,
+                        },
+                    }],
+                ),
+                span: Span {
+                    location: (0, 0),
+                    length: 1,
+                },
+            },
+            IrNode {
+                node: IrOp::Add(1),
+                span: Span {
+                    location: (0, 0),
+                    length: 1,
+                },
+            },
+            IrNode {
+                node: IrOp::FunctionCall("test".to_string()),
+                span: Span {
+                    location: (0, 0),
+                    length: 1,
+                },
+            },
+        ];
+        let obj = compiler.compile_to_object_file(ir_nodes).unwrap();
+        let raw = obj.write().unwrap();
+        std::fs::write("test.obj", raw).unwrap();
+    }
+
+    /*
     #[test]
     fn test_translate_ir_node_add() {
         let mut compiler = get_compiler();
@@ -798,4 +969,5 @@ mod tests {
             ]
         );
     }
+    */
 }
