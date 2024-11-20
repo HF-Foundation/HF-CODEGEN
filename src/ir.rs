@@ -3,6 +3,8 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use hashbrown::HashMap;
+
 use hf_parser_rust::ast::{AstNode, SyntaxNode};
 
 #[derive(Debug, Clone, PartialEq, Copy)]
@@ -177,7 +179,39 @@ pub fn from_ast(ast: Vec<AstNode>) -> Vec<IrNode> {
         ir.extend(node);
     }
 
-    ir.build()
+    let mut ir_nodes = ir.build();
+    fix_func_names(&mut ir_nodes);
+    ir_nodes
+}
+
+fn fix_func_names(ir: &mut Vec<IrNode>) {
+    let mut i = 1usize;
+    let mut name_map = HashMap::new();
+
+    for node in ir.iter_mut() {
+        match &mut node.node {
+            IrOp::Function(name, _) => {
+                if name_map.contains_key(name) {
+                    let mut new_name = format!("{}{}", name, i);
+                    while name_map.contains_key(&new_name) {
+                        i += 1;
+                        new_name = format!("{}{}", name, i);
+                    }
+                    name_map.insert(name.clone(), new_name.clone());
+                    *name = new_name;
+                    i += 1;
+                } else {
+                    name_map.insert(name.clone(), name.clone());
+                }
+            }
+            IrOp::FunctionCall(name) => {
+                if let Some(new_name) = name_map.get(&*name) {
+                    *name = new_name.clone();
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 #[cfg(test)]
