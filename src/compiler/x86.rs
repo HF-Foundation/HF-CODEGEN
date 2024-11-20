@@ -47,30 +47,34 @@ impl Compiler {
         &mut self,
         functions: &mut HashMap<String, CodeLabel>,
         ir_node: Vec<IrNode>,
-    ) -> Result<Vec<u8>, CompilerError> {
+    ) -> Result<CodeAssemblerResult, CompilerError> {
         let mut code_asm = CodeAssembler::new(self.bitness).unwrap();
         for node in ir_node {
             self.translate_ir_node_impl(&mut code_asm, node, functions)?;
         }
         code_asm
-            .assemble(self.settings.base_address)
+            .assemble_options(
+                self.settings.base_address,
+                BlockEncoderOptions::RETURN_RELOC_INFOS
+                    | BlockEncoderOptions::RETURN_NEW_INSTRUCTION_OFFSETS,
+            )
             .map_err(|e| CompilerError {
                 kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
                 span: None,
             })
     }
 
-    fn translate_function(
-        &mut self,
-        functions: &mut HashMap<String, CodeLabel>,
-        name: String,
-        span: crate::ir::Span,
-        children: Vec<IrNode>,
-        skip_skip: bool,
-        code_asm: &mut CodeAssembler,
-    ) -> Result<Vec<u8>, CompilerError> {
-        self.translate_function_impl(code_asm, functions, name, span, children, skip_skip)?;
-    }
+    // fn translate_function(
+    //     &mut self,
+    //     functions: &mut HashMap<String, CodeLabel>,
+    //     name: String,
+    //     span: crate::ir::Span,
+    //     children: Vec<IrNode>,
+    //     skip_skip: bool,
+    //     code_asm: &mut CodeAssembler,
+    // ) -> Result<Vec<u8>, CompilerError> {
+    //     self.translate_function_impl(code_asm, functions, name, span, children, skip_skip)?;
+    // }
 
     // fn generate_memory_alloc_syscall(&mut self, size: u32) -> Result<(), IcedError> {
     //     self.code_asm.mov(r9d, 4)?;
@@ -337,14 +341,13 @@ impl super::CompilerTrait for Compiler {
             })?;
         */
         let mut functions = HashMap::new();
-        self.translate_ir_node(&mut functions, ast)
+        self.translate_ir_node(&mut functions, ast);
+        todo!()
     }
 
     fn compile_to_object_file(&mut self, ast: Vec<IrNode>) -> Result<Object, CompilerError> {
         let mut obj = Object::new(BinaryFormat::Elf, Architecture::X86_64, Endianness::Little);
         obj.add_file_symbol(b"test.hf".to_vec());
-
-        let mut fn_map_ir = HashMap::new();
 
         fn reloc(
             obj: &mut Object,
@@ -377,29 +380,14 @@ impl super::CompilerTrait for Compiler {
 
         let mut code_asm = CodeAssembler::new(self.bitness).unwrap();
 
-        let result = code_asm
-            .assemble_options(
-                self.settings.base_address,
-                BlockEncoderOptions::RETURN_RELOC_INFOS
-                    | BlockEncoderOptions::RETURN_NEW_INSTRUCTION_OFFSETS,
-            )
-            .map_err(|e| CompilerError {
-                kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
-                span: None,
-            });
-        // top level code
+        let mut fn_symbol_map = HashMap::new();
+
+        let mut fn_ast = Vec::new();
         let mut non_fn_ast = Vec::new();
         for node in ast {
-            match node.node {
-                IrOp::Function(name, children) => {
+            match &node.node {
+                IrOp::Function(name, _children) => {
                     let name_bytes = name.as_bytes().to_vec();
-                    let byte_code = self.translate_function(
-                        &mut fn_map_ir,
-                        name.clone(),
-                        node.span,
-                        children,
-                        true,
-                    )?;
                     let fn_symbol = obj.add_symbol(Symbol {
                         name: name_bytes.clone(),
                         value: 0,
@@ -411,21 +399,32 @@ impl super::CompilerTrait for Compiler {
                         flags: SymbolFlags::None,
                     });
 
-                    let _fn_offset = obj.add_symbol_data(fn_symbol, text_section, &byte_code, 16);
+                    fn_symbol_map.insert(name.clone(), fn_symbol);
+                    fn_ast.push(node);
                 }
                 _ => non_fn_ast.push(node),
             }
         }
-        let byte_code = self.translate_function(
-            &mut fn_map_ir,
-            "_start".to_string(),
-            crate::ir::Span {
+        // let byte_code = self.translate_function(
+        //     &mut fn_map_ir,
+        //     "_start".to_string(),
+        //     crate::ir::Span {
+        //         location: (0, 0),
+        //         length: 1,
+        //     },
+        //     non_fn_ast,
+        //     true,
+        // )?;
+
+        fn_ast.push(IrNode {
+            node: IrOp::Function("_start".to_string(), non_fn_ast),
+            span: crate::ir::Span {
                 location: (0, 0),
                 length: 1,
             },
-            non_fn_ast,
-            true,
-        )?;
+        });
+        let mut functions = HashMap::new();
+        let result = self.translate_ir_node(&mut functions, fn_ast)?;
 
         let name_bytes = b"_start".to_vec();
         let fn_symbol = obj.add_symbol(Symbol {
@@ -439,7 +438,15 @@ impl super::CompilerTrait for Compiler {
             flags: SymbolFlags::None,
         });
 
-        let _fn_offset = obj.add_symbol_data(fn_symbol, text_section, &byte_code, 16);
+        let _fn_offset =
+            obj.add_symbol_data(fn_symbol, text_section, &result.inner.code_buffer, 16);
+
+        for (name, symbol_id) in fn_symbol_map {
+            let label = functions.get(&name).expect("couldnt find function label");
+            let ip = result.label_ip(label).expect("couldnt find label ip");
+            let symbol = obj.symbol_mut(symbol_id);
+            symbol.value = ip as u64;
+        }
 
         Ok(obj)
     }
