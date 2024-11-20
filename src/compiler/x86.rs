@@ -378,7 +378,7 @@ impl super::CompilerTrait for Compiler {
             Ok(())
         }
 
-        let text_section = obj.add_section(Vec::new(), b"text".to_vec(), SectionKind::Text);
+        let text_section = obj.add_section(Vec::new(), b".text".to_vec(), SectionKind::Text);
 
         // top level code
         let mut non_fn_ast = Vec::new();
