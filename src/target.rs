@@ -1,4 +1,4 @@
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Copy)]
 pub enum Arch {
     X86,
     X86_64,
@@ -18,14 +18,43 @@ pub enum Arch {
     RiscV128,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[allow(non_camel_case_types)]
+#[derive(Debug, Clone, PartialEq, Copy)]
 pub enum CallingConvention {
-    SystemV,
-    MicrosoftX64,
-    Cdecl,
+    /// The System V calling convention is used on most 32-bit Unix-like systems
+    X86_CDeclGcc,
+    /// cdecl Windows variant
+    X86_CDeclWindows,
+    /// 32 bit OS/2 API
+    X86_Syscall,
+    /// Microsoft __fastcall
+    X86_Fastcall,
+    /// Microsoft x64 (used instead of fastcall, thiscall, cdecl, etc. on x64 windows)
+    /// Technically, vectorcall exists, but we dont care.
+    X86_64_MicrosoftX64,
+    /// System V AMD64 ABI (default on x64 unix systems)
+    X86_64_SystemVAMD64,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+impl CallingConvention {
+    pub fn from_arch_os(arch: Arch, os: Os) -> CallingConvention {
+        match os {
+            Os::Windows => match arch {
+                Arch::X86 => CallingConvention::X86_CDeclWindows,
+                Arch::X86_64 => CallingConvention::X86_64_MicrosoftX64,
+                _ => todo!(),
+            },
+            Os::Linux => match arch {
+                Arch::X86 => CallingConvention::X86_CDeclGcc,
+                Arch::X86_64 => CallingConvention::X86_64_SystemVAMD64,
+                _ => todo!(),
+            },
+            _ => todo!()
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Copy)]
 pub enum Os {
     BareMetal,
     Windows,
@@ -36,22 +65,6 @@ pub enum Os {
     Haiku,
     Redox,
     Theseus,
-}
-
-impl Os {
-    pub fn calling_convention(&self) -> CallingConvention {
-        match self {
-            Os::Windows => CallingConvention::MicrosoftX64,
-            Os::Linux => CallingConvention::SystemV,
-            Os::Bsd => CallingConvention::SystemV,
-            Os::Solaris => CallingConvention::SystemV,
-            Os::Illumos => CallingConvention::SystemV,
-            Os::Haiku => CallingConvention::SystemV,
-            Os::Redox => CallingConvention::SystemV,
-            Os::Theseus => CallingConvention::SystemV,
-            Os::BareMetal => CallingConvention::Cdecl,
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -72,7 +85,7 @@ impl Target {
         #[cfg(target_os = "windows")]
         return Self {
             arch: Arch::X86_64,
-            calling_convention: CallingConvention::MicrosoftX64,
+            calling_convention: CallingConvention::from_arch_os(Arch::X86_64, Os::Windows),
         };
 
         #[cfg(target_os = "linux")]
