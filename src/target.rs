@@ -94,6 +94,7 @@ impl Target {
             calling_convention: CallingConvention::SystemV,
         };
 
+        #[cfg(not(any(target_os = "windows", target_os = "linux")))]
         panic!("Unsupported target os!")
     }
 }
