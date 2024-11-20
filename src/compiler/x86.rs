@@ -3,6 +3,7 @@ use alloc::vec::Vec;
 
 use hashbrown::HashMap;
 use iced_x86::code_asm::{CodeLabel, *};
+use iced_x86::BlockEncoderOptions;
 
 use super::{CompilerError, CompilerErrorKind, CompilerSettings};
 use crate::ir::{IrNode, IrOp};
@@ -66,15 +67,9 @@ impl Compiler {
         span: crate::ir::Span,
         children: Vec<IrNode>,
         skip_skip: bool,
+        code_asm: &mut CodeAssembler,
     ) -> Result<Vec<u8>, CompilerError> {
-        let mut code_asm = CodeAssembler::new(self.bitness).unwrap();
-        self.translate_function_impl(&mut code_asm, functions, name, span, children, skip_skip)?;
-        code_asm
-            .assemble(self.settings.base_address)
-            .map_err(|e| CompilerError {
-                kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
-                span: None,
-            })
+        self.translate_function_impl(code_asm, functions, name, span, children, skip_skip)?;
     }
 
     // fn generate_memory_alloc_syscall(&mut self, size: u32) -> Result<(), IcedError> {
@@ -380,6 +375,18 @@ impl super::CompilerTrait for Compiler {
 
         let text_section = obj.add_section(Vec::new(), b".text".to_vec(), SectionKind::Text);
 
+        let mut code_asm = CodeAssembler::new(self.bitness).unwrap();
+
+        let result = code_asm
+            .assemble_options(
+                self.settings.base_address,
+                BlockEncoderOptions::RETURN_RELOC_INFOS
+                    | BlockEncoderOptions::RETURN_NEW_INSTRUCTION_OFFSETS,
+            )
+            .map_err(|e| CompilerError {
+                kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                span: None,
+            });
         // top level code
         let mut non_fn_ast = Vec::new();
         for node in ast {
@@ -405,12 +412,20 @@ impl super::CompilerTrait for Compiler {
                     });
 
                     let _fn_offset = obj.add_symbol_data(fn_symbol, text_section, &byte_code, 16);
-
                 }
                 _ => non_fn_ast.push(node),
             }
         }
-        let byte_code = self.translate_ir_node(&mut fn_map_ir, non_fn_ast)?;
+        let byte_code = self.translate_function(
+            &mut fn_map_ir,
+            "_start".to_string(),
+            crate::ir::Span {
+                location: (0, 0),
+                length: 1,
+            },
+            non_fn_ast,
+            true,
+        )?;
 
         let name_bytes = b"_start".to_vec();
         let fn_symbol = obj.add_symbol(Symbol {
@@ -425,7 +440,6 @@ impl super::CompilerTrait for Compiler {
         });
 
         let _fn_offset = obj.add_symbol_data(fn_symbol, text_section, &byte_code, 16);
-
 
         Ok(obj)
     }
