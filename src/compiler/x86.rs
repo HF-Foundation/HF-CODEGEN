@@ -11,8 +11,8 @@ use crate::target::CallingConvention;
 use object::endian::Endianness;
 use object::write::{
     Architecture, BinaryFormat, Object, Relocation, RelocationEncoding, RelocationFlags,
-    RelocationKind, SectionId, StandardSection, Symbol, SymbolFlags, SymbolId, SymbolKind,
-    SymbolScope, SymbolSection,
+    RelocationKind, SectionId, SectionKind, StandardSection, Symbol, SymbolFlags, SymbolId,
+    SymbolKind, SymbolScope, SymbolSection,
 };
 
 pub struct Compiler {
@@ -65,9 +65,10 @@ impl Compiler {
         name: String,
         span: crate::ir::Span,
         children: Vec<IrNode>,
+        skip_skip: bool,
     ) -> Result<Vec<u8>, CompilerError> {
         let mut code_asm = CodeAssembler::new(self.bitness).unwrap();
-        self.translate_function_impl(&mut code_asm, functions, name, span, children)?;
+        self.translate_function_impl(&mut code_asm, functions, name, span, children, skip_skip)?;
         code_asm
             .assemble(self.settings.base_address)
             .map_err(|e| CompilerError {
@@ -93,14 +94,22 @@ impl Compiler {
         name: String,
         span: crate::ir::Span,
         children: Vec<IrNode>,
+        skip_skip: bool,
     ) -> Result<(), CompilerError> {
         let mut fn_label = code_asm.create_label();
         let mut skip_fn_label = code_asm.create_label();
 
-        code_asm.jmp(skip_fn_label).map_err(|e| CompilerError {
-            kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
-            span: Some(span),
-        })?;
+        if skip_skip {
+            code_asm.zero_bytes().map_err(|e| CompilerError {
+                kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                span: Some(span),
+            })?;
+        } else {
+            code_asm.jmp(skip_fn_label).map_err(|e| CompilerError {
+                kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                span: Some(span),
+            })?;
+        }
         code_asm
             .set_label(&mut fn_label)
             .map_err(|e| CompilerError {
@@ -298,7 +307,14 @@ impl Compiler {
                 })?;
             }
             IrOp::Function(name, fn_ir_nodes) => {
-                self.translate_function_impl(code_asm, functions, name, ir_node.span, fn_ir_nodes)?;
+                self.translate_function_impl(
+                    code_asm,
+                    functions,
+                    name,
+                    ir_node.span,
+                    fn_ir_nodes,
+                    false,
+                )?;
             }
             IrOp::FunctionCall(name) => {
                 let fn_label = functions.get(&name).ok_or(CompilerError {
@@ -362,14 +378,21 @@ impl super::CompilerTrait for Compiler {
             Ok(())
         }
 
+        let text_section = obj.add_section(Vec::new(), b"text".to_vec(), SectionKind::Text);
+
         // top level code
         let mut non_fn_ast = Vec::new();
         for node in ast {
             match node.node {
                 IrOp::Function(name, children) => {
                     let name_bytes = name.as_bytes().to_vec();
-                    let byte_code =
-                        self.translate_function(&mut fn_map_ir, name.clone(), node.span, children)?;
+                    let byte_code = self.translate_function(
+                        &mut fn_map_ir,
+                        name.clone(),
+                        node.span,
+                        children,
+                        true,
+                    )?;
                     let fn_symbol = obj.add_symbol(Symbol {
                         name: name_bytes.clone(),
                         value: 0,
@@ -377,12 +400,11 @@ impl super::CompilerTrait for Compiler {
                         kind: SymbolKind::Text,
                         scope: SymbolScope::Linkage,
                         weak: false,
-                        section: SymbolSection::Undefined,
+                        section: SymbolSection::Section(text_section),
                         flags: SymbolFlags::None,
                     });
 
-                    let fn_section = obj.add_subsection(StandardSection::Text, &name_bytes);
-                    let fn_offset = obj.add_symbol_data(fn_symbol, fn_section, &byte_code, 1);
+                    let fn_offset = obj.add_symbol_data(fn_symbol, text_section, &byte_code, 1);
 
                     // Do relocations AFTER adding the function to the function map
                     // Otherwise we can't call functions recursively
@@ -390,7 +412,7 @@ impl super::CompilerTrait for Compiler {
                     fn_map.insert(name, (fn_offset, fn_symbol, -4));
 
                     // Now we can safely do all our relocations
-                    reloc(&mut obj, fn_section, &fn_map)?;
+                    reloc(&mut obj, text_section, &fn_map)?;
 
                     // obj.add_relocation(
                     //     fn_section,
@@ -407,7 +429,7 @@ impl super::CompilerTrait for Compiler {
         }
         let byte_code = self.translate_ir_node(&mut fn_map_ir, non_fn_ast)?;
 
-        let name_bytes = b"main".to_vec();
+        let name_bytes = b"_start".to_vec();
         let fn_symbol = obj.add_symbol(Symbol {
             name: name_bytes.clone(),
             value: 0,
@@ -419,10 +441,9 @@ impl super::CompilerTrait for Compiler {
             flags: SymbolFlags::None,
         });
 
-        let fn_section = obj.add_subsection(StandardSection::Text, &name_bytes);
-        let _fn_offset = obj.add_symbol_data(fn_symbol, fn_section, &byte_code, 1);
+        let _fn_offset = obj.add_symbol_data(fn_symbol, text_section, &byte_code, 1);
 
-        reloc(&mut obj, fn_section, &fn_map)?;
+        reloc(&mut obj, text_section, &fn_map)?;
 
         Ok(obj)
     }
@@ -480,7 +501,7 @@ mod tests {
         ];
         let obj = compiler.compile_to_object_file(ir_nodes).unwrap();
         let raw = obj.write().unwrap();
-        std::fs::write("test.obj", raw).unwrap();
+        std::fs::write("test.o", raw).unwrap();
     }
 
     /*
