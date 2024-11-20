@@ -347,9 +347,9 @@ impl super::CompilerTrait for Compiler {
 
     fn compile_to_object_file(&mut self, ast: Vec<IrNode>) -> Result<Object, CompilerError> {
         let mut obj = Object::new(BinaryFormat::Elf, Architecture::X86_64, Endianness::Little);
+        obj.add_file_symbol(b"test.hf".to_vec());
 
         let mut fn_map_ir = HashMap::new();
-        let mut fn_map = HashMap::new();
 
         fn reloc(
             obj: &mut Object,
@@ -398,31 +398,14 @@ impl super::CompilerTrait for Compiler {
                         value: 0,
                         size: 0,
                         kind: SymbolKind::Text,
-                        scope: SymbolScope::Linkage,
+                        scope: SymbolScope::Dynamic,
                         weak: false,
                         section: SymbolSection::Section(text_section),
                         flags: SymbolFlags::None,
                     });
 
-                    let fn_offset = obj.add_symbol_data(fn_symbol, text_section, &byte_code, 1);
+                    let _fn_offset = obj.add_symbol_data(fn_symbol, text_section, &byte_code, 16);
 
-                    // Do relocations AFTER adding the function to the function map
-                    // Otherwise we can't call functions recursively
-
-                    fn_map.insert(name, (fn_offset, fn_symbol, -4));
-
-                    // Now we can safely do all our relocations
-                    reloc(&mut obj, text_section, &fn_map)?;
-
-                    // obj.add_relocation(
-                    //     fn_section,
-                    //     Relocation {
-                    //         offset: puts_reloc_offset,
-                    //         symbol: puts_symbol,
-                    //         addend: -4,
-                    //         flags: puts_reloc_flags,
-                    //     },
-                    // );
                 }
                 _ => non_fn_ast.push(node),
             }
@@ -435,15 +418,14 @@ impl super::CompilerTrait for Compiler {
             value: 0,
             size: 0,
             kind: SymbolKind::Text,
-            scope: SymbolScope::Linkage,
+            scope: SymbolScope::Dynamic,
             weak: false,
-            section: SymbolSection::Undefined,
+            section: SymbolSection::Section(text_section),
             flags: SymbolFlags::None,
         });
 
-        let _fn_offset = obj.add_symbol_data(fn_symbol, text_section, &byte_code, 1);
+        let _fn_offset = obj.add_symbol_data(fn_symbol, text_section, &byte_code, 16);
 
-        reloc(&mut obj, text_section, &fn_map)?;
 
         Ok(obj)
     }
