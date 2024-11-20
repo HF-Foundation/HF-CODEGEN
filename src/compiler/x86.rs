@@ -43,6 +43,44 @@ impl Compiler {
         Ok(())
     }
 
+    fn generate_memory_alloc_syscall(&mut self, size: u64) -> Result<(), IcedError> {
+        // To allocate memory in Windows via syscall (in assembly), you can use the `NtAllocateVirtualMemory` function.
+        // Here's a general outline of how you might do it:
+        //
+        // 1. Set up the syscall number for `NtAllocateVirtualMemory` in the `eax` register.
+        //    The syscall number for `NtAllocateVirtualMemory` is 0x18 (24 in decimal).
+        // 2. Set up the arguments for the syscall in the appropriate registers:
+        //    - `HANDLE ProcessHandle` (usually `-1` for the current process) in `rcx`.
+        //    - `PVOID *BaseAddress` (pointer to the base address of the allocated region) in `rdx`.
+        //    - `ULONG_PTR ZeroBits` (number of high-order address bits that must be zero) in `r8`.
+        //    - `PSIZE_T RegionSize` (pointer to the size of the region to allocate) in `r9`.
+        //    - `ULONG AllocationType` (type of memory allocation) in the stack.
+        //    - `ULONG Protect` (memory protection for the region) in the stack.
+        // 3. Make the syscall using the `syscall` instruction.
+        // 4. Check the return value in `eax` for success or failure.
+
+        // syscall number
+        self.code_asm.mov(eax, 0x18u32)?;
+        // process handle (-1 = this process)
+        self.code_asm.mov(rcx, -1i64)?;
+        // base address (null)
+        self.code_asm.mov(rdx, 0u64)?;
+        // zero bits (ignored)
+        self.code_asm.mov(r8, 0u64)?;
+        // how much to allocate
+        self.code_asm.mov(r9, size)?;
+        // now push arguments, right-to-left
+        // push protect PAGE_READWRITE
+        self.code_asm.push(0x04)?;
+        // push MEM_COMMIT | MEM_RESERVE
+        self.code_asm.push(0x00001000 | 0x00002000)?;
+        // syscall
+        self.code_asm.syscall()?;
+        self.code_asm.mov(r8, rax)?;
+
+        Ok(())
+    }
+
     fn translate_ir_node_impl(
         &mut self,
         ir_node: IrNode,
@@ -273,11 +311,13 @@ impl Compiler {
 
 impl super::CompilerTrait for Compiler {
     fn compile_to_bytecode(&mut self, ast: Vec<IrNode>) -> Result<Vec<u8>, CompilerError> {
+        /* Doesn't work rn
         self.generate_memory_alloc_syscall(1024)
             .map_err(|e| CompilerError {
                 kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
                 span: None,
             })?;
+        */
         self.translate_ir_node(ast)?;
         self.code_asm
             .assemble(self.settings.base_address)
