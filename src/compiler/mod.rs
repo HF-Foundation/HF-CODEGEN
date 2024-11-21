@@ -8,6 +8,8 @@ use crate::ir::IrNode;
 use crate::target::{Arch, Target};
 
 mod x86;
+#[cfg(test)]
+mod x86_64_tests;
 
 #[derive(Debug, Error)]
 pub struct CompilerError {
