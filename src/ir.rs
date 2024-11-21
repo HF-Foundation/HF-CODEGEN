@@ -42,6 +42,8 @@ pub enum IrOp {
     FunctionCall(String),
     Asm(String),
     Condition(Vec<IrNode>),
+    // internal node types
+    ExternalFunctionCall(String),
 }
 
 impl IrOp {

@@ -22,6 +22,12 @@ pub struct Compiler {
     settings: CompilerSettings,
 }
 
+#[derive(Debug, Clone)]
+struct CompilationContext {
+    functions: HashMap<String, CodeLabel>,
+    external_calls: HashMap<String, CodeLabel>,
+}
+
 impl Compiler {
     pub fn new(
         bitness: u32,
@@ -45,12 +51,12 @@ impl Compiler {
     /// TODO: we might wanna return the hashmap here
     fn translate_ir_node(
         &mut self,
-        functions: &mut HashMap<String, CodeLabel>,
+        ctx: &mut CompilationContext,
         ir_node: Vec<IrNode>,
     ) -> Result<CodeAssemblerResult, CompilerError> {
         let mut code_asm = CodeAssembler::new(self.bitness).unwrap();
         for node in ir_node {
-            self.translate_ir_node_impl(&mut code_asm, node, functions)?;
+            self.translate_ir_node_impl(&mut code_asm, node, ctx)?;
         }
         code_asm
             .assemble_options(
@@ -89,7 +95,7 @@ impl Compiler {
     fn translate_function_impl(
         &mut self,
         code_asm: &mut CodeAssembler,
-        functions: &mut HashMap<String, CodeLabel>,
+        ctx: &mut CompilationContext,
         name: String,
         span: crate::ir::Span,
         children: Vec<IrNode>,
@@ -107,13 +113,12 @@ impl Compiler {
                 kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
                 span: Some(span),
             })?;
-        // we dont care if the function already exists, if it does, tough luck,
-        // we're overwriting it and we're not going to check if it's the same
-        functions.insert(name.clone(), fn_label);
-        let mut scope_functions = functions.clone();
+        ctx.functions.insert(name.clone(), fn_label);
+        let mut scope_ctx = ctx.clone();
         for fn_ir_node in children {
-            self.translate_ir_node_impl(code_asm, fn_ir_node, &mut scope_functions)?;
+            self.translate_ir_node_impl(code_asm, fn_ir_node, &mut scope_ctx)?;
         }
+        ctx.external_calls = scope_ctx.external_calls;
         code_asm.ret().map_err(|e| CompilerError {
             kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
             span: Some(span),
@@ -126,7 +131,7 @@ impl Compiler {
         &mut self,
         code_asm: &mut CodeAssembler,
         ir_node: IrNode,
-        functions: &mut HashMap<String, CodeLabel>,
+        ctx: &mut CompilationContext,
     ) -> Result<(), CompilerError> {
         match ir_node.node {
             IrOp::Add(n) => {
@@ -264,10 +269,11 @@ impl Compiler {
                     span: Some(ir_node.span),
                 })?;
 
-                let mut scope_functions = functions.clone();
+                let mut scope_ctx = ctx.clone();
                 for cond_ir_node in cond_ir_nodes {
-                    self.translate_ir_node_impl(code_asm, cond_ir_node, &mut scope_functions)?;
+                    self.translate_ir_node_impl(code_asm, cond_ir_node, &mut scope_ctx)?;
                 }
+                ctx.external_calls = scope_ctx.external_calls;
 
                 code_asm.jmp(start_label).map_err(|e| CompilerError {
                     kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
@@ -288,14 +294,30 @@ impl Compiler {
                 })?;
             }
             IrOp::Function(name, fn_ir_nodes) => {
-                self.translate_function_impl(code_asm, functions, name, ir_node.span, fn_ir_nodes)?;
+                self.translate_function_impl(code_asm, ctx, name, ir_node.span, fn_ir_nodes)?;
             }
             IrOp::FunctionCall(name) => {
-                let fn_label = functions.get(&name).ok_or(CompilerError {
+                let fn_label = ctx.functions.get(&name).ok_or(CompilerError {
                     kind: super::CompilerErrorKind::FunctionNotFound(name.clone()),
                     span: Some(ir_node.span),
                 })?;
                 code_asm.call(*fn_label).map_err(|e| CompilerError {
+                    kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                    span: Some(ir_node.span),
+                })?;
+            }
+            IrOp::ExternalFunctionCall(name) => {
+                let mut lbl = code_asm.create_label();
+                code_asm.zero_bytes().map_err(|e| CompilerError {
+                    kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                    span: Some(ir_node.span),
+                })?;
+                code_asm.set_label(&mut lbl).map_err(|e| CompilerError {
+                    kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                    span: Some(ir_node.span),
+                })?;
+                ctx.external_calls.insert(name.clone(), lbl);
+                code_asm.call(0x5).map_err(|e| CompilerError {
                     kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
                     span: Some(ir_node.span),
                 })?;
@@ -315,11 +337,12 @@ impl super::CompilerTrait for Compiler {
                 span: None,
             })?;
         */
-        let mut functions = HashMap::new();
+        /*let mut functions = HashMap::new();
         Ok(self
             .translate_ir_node(&mut functions, ast)?
             .inner
-            .code_buffer)
+            .code_buffer)*/
+        todo!()
     }
 
     fn compile_to_object_file(&mut self, ast: Vec<IrNode>) -> Result<Object, CompilerError> {
@@ -390,8 +413,11 @@ impl super::CompilerTrait for Compiler {
                 length: 1,
             },
         });
-        let mut functions = HashMap::new();
-        let result = self.translate_ir_node(&mut functions, fn_ast)?;
+        let mut ctx = CompilationContext {
+            functions: HashMap::new(),
+            external_calls: HashMap::new(),
+        };
+        let result = self.translate_ir_node(&mut ctx, fn_ast)?;
 
         let name_bytes = b"_start".to_vec();
         let fn_symbol = obj.add_symbol(Symbol {
@@ -409,7 +435,8 @@ impl super::CompilerTrait for Compiler {
             obj.add_symbol_data(fn_symbol, text_section, &result.inner.code_buffer, 16);
 
         // Update the IP for our start symbol
-        let label = functions
+        let label = ctx
+            .functions
             .get(&"_start".to_string())
             .expect("couldnt find function label for _start");
         let ip = result
@@ -417,9 +444,41 @@ impl super::CompilerTrait for Compiler {
             .expect("couldnt find label ip for _start");
         obj.set_symbol_data(fn_symbol, text_section, ip, 0);
 
+        let alloc_sym = obj.add_symbol(Symbol {
+            name: b"hf_alloc".to_vec(),
+            value: 0,
+            size: 0,
+            kind: SymbolKind::Text,
+            scope: SymbolScope::Dynamic,
+            weak: false,
+            section: SymbolSection::Undefined,
+            flags: SymbolFlags::None,
+        });
+        let label = ctx.external_calls.get("hf_alloc").unwrap();
+        // the +1 here is crucial because the address of the call doesn't start until
+        // one byte in (skips e8)
+        let alloc_sym_location = result.label_ip(label).unwrap() + 1;
+        obj.add_relocation(
+            text_section,
+            Relocation {
+                offset: alloc_sym_location,
+                symbol: alloc_sym,
+                addend: -4,
+                flags: RelocationFlags::Generic {
+                    kind: RelocationKind::PltRelative,
+                    encoding: RelocationEncoding::X86Branch,
+                    size: 32,
+                },
+            },
+        )
+        .map_err(|e| CompilerError {
+            kind: CompilerErrorKind::RelocationFailed(e.to_string()),
+            span: None,
+        })?;
+
         // Update the IP for symbols
         for (name, symbol_id) in fn_symbol_map {
-            let label = functions.get(&name).expect("couldnt find function label");
+            let label = ctx.functions.get(&name).expect("couldnt find function label");
             let ip = result.label_ip(label).expect("couldnt find label ip");
             obj.set_symbol_data(symbol_id, text_section, ip, 0);
         }
@@ -448,30 +507,7 @@ mod tests {
         let mut compiler = get_compiler();
         let ir_nodes = vec![
             IrNode {
-                node: IrOp::Function(
-                    "test".to_string(),
-                    vec![IrNode {
-                        node: IrOp::Add(1),
-                        span: Span {
-                            location: (0, 0),
-                            length: 1,
-                        },
-                    }],
-                ),
-                span: Span {
-                    location: (0, 0),
-                    length: 1,
-                },
-            },
-            IrNode {
-                node: IrOp::Add(1),
-                span: Span {
-                    location: (0, 0),
-                    length: 1,
-                },
-            },
-            IrNode {
-                node: IrOp::FunctionCall("test".to_string()),
+                node: IrOp::ExternalFunctionCall("hf_alloc".to_string()),
                 span: Span {
                     location: (0, 0),
                     length: 1,
