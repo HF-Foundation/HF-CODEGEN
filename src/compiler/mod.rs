@@ -35,6 +35,7 @@ pub(crate) trait CompilerTrait {
     fn compile_to_object_file(
         &mut self,
         ast: Vec<IrNode>,
+        filename: &str,
     ) -> Result<object::write::Object, CompilerError>;
 }
 

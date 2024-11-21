@@ -25,7 +25,17 @@ pub struct Compiler {
 #[derive(Debug, Clone)]
 struct CompilationContext {
     functions: HashMap<String, CodeLabel>,
-    external_calls: HashMap<String, CodeLabel>,
+    external_calls: HashMap<String, Vec<CodeLabel>>,
+}
+
+impl CompilationContext {
+    fn add_external_call(&mut self, name: String, label: CodeLabel) {
+        if let Some(v) = self.external_calls.get_mut(&name) {
+            v.push(label);
+        } else {
+            self.external_calls.insert(name, vec![label]);
+        }
+    }
 }
 
 impl Compiler {
@@ -307,20 +317,22 @@ impl Compiler {
                 })?;
             }
             IrOp::ExternalFunctionCall(name) => {
-                let mut lbl = code_asm.create_label();
+                let mut label = code_asm.create_label();
                 code_asm.zero_bytes().map_err(|e| CompilerError {
                     kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
                     span: Some(ir_node.span),
                 })?;
-                code_asm.set_label(&mut lbl).map_err(|e| CompilerError {
+                code_asm.set_label(&mut label).map_err(|e| CompilerError {
                     kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
                     span: Some(ir_node.span),
                 })?;
-                ctx.external_calls.insert(name.clone(), lbl);
-                code_asm.call(0x5).map_err(|e| CompilerError {
-                    kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
-                    span: Some(ir_node.span),
-                })?;
+                ctx.add_external_call(name, label);
+                code_asm
+                    .call(0x5 * (ctx.external_calls.len() as u64 + 1))
+                    .map_err(|e| CompilerError {
+                        kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                        span: Some(ir_node.span),
+                    })?;
             }
             _ => todo!(),
         }
@@ -345,9 +357,54 @@ impl super::CompilerTrait for Compiler {
         todo!()
     }
 
-    fn compile_to_object_file(&mut self, ast: Vec<IrNode>) -> Result<Object, CompilerError> {
+    fn compile_to_object_file(
+        &mut self,
+        ast: Vec<IrNode>,
+        filename: &str,
+    ) -> Result<Object, CompilerError> {
         let mut obj = Object::new(BinaryFormat::Elf, Architecture::X86_64, Endianness::Little);
-        obj.add_file_symbol(b"test.hf".to_vec());
+        obj.add_file_symbol(filename.as_bytes().to_vec());
+
+        fn add_relocations_for_external_symbol(
+            obj: &mut Object,
+            section: SectionId,
+            symbol: &str,
+            call_sites: Vec<u64>,
+        ) -> Result<(), CompilerError> {
+            let alloc_sym = obj.add_symbol(Symbol {
+                name: symbol.as_bytes().to_vec(),
+                value: 0,
+                size: 0,
+                kind: SymbolKind::Text,
+                scope: SymbolScope::Dynamic,
+                weak: false,
+                section: SymbolSection::Undefined,
+                flags: SymbolFlags::None,
+            });
+            for call_site in call_sites {
+                obj.add_relocation(
+                    section,
+                    Relocation {
+                        // the +1 here is crucial because the address of the call doesn't start until
+                        // one byte in (skips e8), we basically want to tell the linker "please replace the
+                        // 32 bits at this address with the address of the symbol"
+                        offset: call_site + 1,
+                        symbol: alloc_sym,
+                        addend: -4,
+                        flags: RelocationFlags::Generic {
+                            kind: RelocationKind::PltRelative,
+                            encoding: RelocationEncoding::X86Branch,
+                            size: 32,
+                        },
+                    },
+                )
+                .map_err(|e| CompilerError {
+                    kind: CompilerErrorKind::RelocationFailed(e.to_string()),
+                    span: None,
+                })?;
+            }
+            Ok(())
+        }
 
         fn reloc(
             obj: &mut Object,
@@ -444,41 +501,30 @@ impl super::CompilerTrait for Compiler {
             .expect("couldnt find label ip for _start");
         obj.set_symbol_data(fn_symbol, text_section, ip, 0);
 
-        let alloc_sym = obj.add_symbol(Symbol {
-            name: b"hf_alloc".to_vec(),
-            value: 0,
-            size: 0,
-            kind: SymbolKind::Text,
-            scope: SymbolScope::Dynamic,
-            weak: false,
-            section: SymbolSection::Undefined,
-            flags: SymbolFlags::None,
+        // Map from a
+        // HashMap<String, Vec<CodeLabel>>
+        // to a
+        // HashMap<String, Vec<u64>>
+        // where each u64 is the ip of the label
+        let externals = ctx.external_calls.iter().map(|(name, label_vec)| {
+            (
+                name,
+                label_vec
+                    .iter()
+                    .map(|label| result.label_ip(label).unwrap() as u64)
+                    .collect::<Vec<u64>>(),
+            )
         });
-        let label = ctx.external_calls.get("hf_alloc").unwrap();
-        // the +1 here is crucial because the address of the call doesn't start until
-        // one byte in (skips e8)
-        let alloc_sym_location = result.label_ip(label).unwrap() + 1;
-        obj.add_relocation(
-            text_section,
-            Relocation {
-                offset: alloc_sym_location,
-                symbol: alloc_sym,
-                addend: -4,
-                flags: RelocationFlags::Generic {
-                    kind: RelocationKind::PltRelative,
-                    encoding: RelocationEncoding::X86Branch,
-                    size: 32,
-                },
-            },
-        )
-        .map_err(|e| CompilerError {
-            kind: CompilerErrorKind::RelocationFailed(e.to_string()),
-            span: None,
-        })?;
+        for (name, call_sites) in externals {
+            add_relocations_for_external_symbol(&mut obj, text_section, &name, call_sites)?;
+        }
 
         // Update the IP for symbols
         for (name, symbol_id) in fn_symbol_map {
-            let label = ctx.functions.get(&name).expect("couldnt find function label");
+            let label = ctx
+                .functions
+                .get(&name)
+                .expect("couldnt find function label");
             let ip = result.label_ip(label).expect("couldnt find label ip");
             obj.set_symbol_data(symbol_id, text_section, ip, 0);
         }
@@ -513,8 +559,17 @@ mod tests {
                     length: 1,
                 },
             },
+            IrNode {
+                node: IrOp::ExternalFunctionCall("hf_alloc".to_string()),
+                span: Span {
+                    location: (0, 0),
+                    length: 1,
+                },
+            },
         ];
-        let obj = compiler.compile_to_object_file(ir_nodes).unwrap();
+        let obj = compiler
+            .compile_to_object_file(ir_nodes, "test.hf")
+            .unwrap();
         let raw = obj.write().unwrap();
         std::fs::write("test.o", raw).unwrap();
     }
