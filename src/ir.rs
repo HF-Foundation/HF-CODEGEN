@@ -40,10 +40,8 @@ pub enum IrOp {
     MemAlloc(usize),
     Function(String, Vec<IrNode>),
     FunctionCall(String),
-    Asm(String),
-    Condition(Vec<IrNode>),
-    // internal node types
     ExternalFunctionCall(String),
+    Condition(Vec<IrNode>),
 }
 
 impl IrOp {
@@ -159,7 +157,7 @@ impl IrBuilder {
                 SyntaxNode::MemAlloc(n) => IrOp::MemAlloc(n),
                 SyntaxNode::Function(name, args) => IrOp::Function(name, from_ast(args)),
                 SyntaxNode::FuncCall(name) => IrOp::FunctionCall(name),
-                SyntaxNode::Asm(code) => IrOp::Asm(code),
+                SyntaxNode::ExternalFunctionCall(code) => IrOp::ExternalFunctionCall(code),
                 SyntaxNode::Condition(conditions) => IrOp::Condition(from_ast(conditions)),
             },
             span: Span::from_location(ast.location),

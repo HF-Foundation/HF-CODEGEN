@@ -65,6 +65,14 @@ impl HfCompiler {
     pub fn compile_to_bytecode(&mut self, ast: Vec<IrNode>) -> Result<Vec<u8>, CompilerError> {
         self.compiler.compile_to_bytecode(ast)
     }
+
+    pub fn compile_to_object_file(
+        &mut self,
+        ast: Vec<IrNode>,
+        source_filename: &str,
+    ) -> Result<object::write::Object, CompilerError> {
+        self.compiler.compile_to_object_file(ast, source_filename)
+    }
 }
 
 pub struct CompilerSettings {

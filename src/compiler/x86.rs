@@ -524,14 +524,21 @@ mod tests {
         let mut compiler = get_compiler();
         let ir_nodes = vec![
             IrNode {
-                node: IrOp::ExternalFunctionCall("hf_alloc".to_string()),
+                node: IrOp::ExternalFunctionCall("hf_prealloc".to_string()),
                 span: Span {
                     location: (0, 0),
                     length: 1,
                 },
             },
             IrNode {
-                node: IrOp::ExternalFunctionCall("hf_alloc".to_string()),
+                node: IrOp::Add(5),
+                span: Span {
+                    location: (0, 0),
+                    length: 1,
+                },
+            },
+            IrNode {
+                node: IrOp::ExternalFunctionCall("hf_exit".to_string()),
                 span: Span {
                     location: (0, 0),
                     length: 1,
