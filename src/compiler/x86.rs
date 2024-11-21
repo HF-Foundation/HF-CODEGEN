@@ -145,9 +145,20 @@ impl Compiler {
     ) -> Result<(), CompilerError> {
         match ir_node.node {
             IrOp::Add(n) => {
+                let mut rem = n;
+                while rem > 255 {
+                    rem -= 255;
+                    code_asm
+                        // add byte ptr[r8], n
+                        .add(byte_ptr(r8), 255 as u32)
+                        .map_err(|e| CompilerError {
+                            kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                            span: Some(ir_node.span),
+                        })?;
+                }
                 code_asm
                     // add byte ptr[r8], n
-                    .add(byte_ptr(r8), n as u32)
+                    .add(byte_ptr(r8), rem as u32)
                     .map_err(|e| CompilerError {
                         kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
                         span: Some(ir_node.span),
@@ -346,10 +357,7 @@ impl super::CompilerTrait for Compiler {
             functions: HashMap::new(),
             external_calls: HashMap::new(),
         };
-        Ok(self
-            .translate_ir_node(&mut ctx, ir)?
-            .inner
-            .code_buffer)
+        Ok(self.translate_ir_node(&mut ctx, ir)?.inner.code_buffer)
     }
 
     fn compile_to_object_file(

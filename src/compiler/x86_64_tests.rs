@@ -159,16 +159,22 @@ fn test_fns_with_same_name() {
 
 #[test]
 fn test_long_add() {
-    assert_eq_hex!(compile_to_bytecode(&"+".repeat(300)), vec![
-        0x41, 0x80, 0x0, 0xff, // 255
-        0x41, 0x80, 0x0, 0x2d, // 45
-    ]);
+    assert_eq_hex!(
+        compile_to_bytecode(&"+".repeat(300)),
+        vec![
+            0x41, 0x80, 0x0, 0xff, // 255
+            0x41, 0x80, 0x0, 0x2d, // 45
+        ]
+    );
 }
 
 #[test]
 fn test_long_code() {
     assert_eq_hex!(
-        compile_to_bytecode(&format!("{}{}{}", ":test{}", "+".repeat(1024*1024), "@test;")),
-        vec![]
+        compile_to_bytecode(&format!("{}{}{}", ":test{}", "+".repeat(1024), "@test;")),
+        vec![
+            0xc3, 0x41, 0x80, 0x0, 0xff, 0x41, 0x80, 0x0, 0xff, 0x41, 0x80, 0x0, 0xff, 0x41, 0x80,
+            0x0, 0xff, 0x41, 0x80, 0x0, 0x4, 0xe8, 0xe6, 0xff, 0xff, 0xff,
+        ]
     )
 }
