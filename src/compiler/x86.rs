@@ -373,8 +373,8 @@ impl super::CompilerTrait for Compiler {
         ) -> Result<(), CompilerError> {
             let alloc_sym = obj.add_symbol(Symbol {
                 name: symbol.as_bytes().to_vec(),
-                value: 0,
-                size: 0,
+                value: 0, // not our symbol, so we don't know the value
+                size: 0,  // same here
                 kind: SymbolKind::Text,
                 scope: SymbolScope::Dynamic,
                 weak: false,
@@ -390,38 +390,11 @@ impl super::CompilerTrait for Compiler {
                         // 32 bits at this address with the address of the symbol"
                         offset: call_site + 1,
                         symbol: alloc_sym,
-                        addend: -4,
+                        addend: -4, // subtract 4 from the address to get the address of the symbol
                         flags: RelocationFlags::Generic {
                             kind: RelocationKind::PltRelative,
                             encoding: RelocationEncoding::X86Branch,
-                            size: 32,
-                        },
-                    },
-                )
-                .map_err(|e| CompilerError {
-                    kind: CompilerErrorKind::RelocationFailed(e.to_string()),
-                    span: None,
-                })?;
-            }
-            Ok(())
-        }
-
-        fn reloc(
-            obj: &mut Object,
-            fn_section: SectionId,
-            fn_map: &HashMap<String, (u64, SymbolId, i64)>,
-        ) -> Result<(), CompilerError> {
-            for (_name, (offset, symbol, addend)) in fn_map {
-                obj.add_relocation(
-                    fn_section,
-                    Relocation {
-                        offset: *offset,
-                        symbol: symbol.clone(),
-                        addend: *addend,
-                        flags: RelocationFlags::Generic {
-                            kind: RelocationKind::PltRelative,
-                            encoding: RelocationEncoding::X86Branch,
-                            size: 32,
+                            size: 32, // size of the address to replace
                         },
                     },
                 )
@@ -434,8 +407,6 @@ impl super::CompilerTrait for Compiler {
         }
 
         let text_section = obj.add_section(Vec::new(), b".text".to_vec(), SectionKind::Text);
-
-        let mut code_asm = CodeAssembler::new(self.bitness).unwrap();
 
         let mut fn_symbol_map = HashMap::new();
 
