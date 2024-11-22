@@ -338,14 +338,10 @@ impl Compiler {
                     span: Some(ir_node.span),
                 })?;
                 ctx.add_external_call(name, label);
-                let last_instr = code_asm.instructions().last().unwrap();
-                let ip = last_instr.ip() + last_instr.len() as u64;
-                code_asm
-                    .call(ip)
-                    .map_err(|e| CompilerError {
-                        kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
-                        span: Some(ir_node.span),
-                    })?;
+                code_asm.call(label).map_err(|e| CompilerError {
+                    kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                    span: Some(ir_node.span),
+                })?;
             }
             _ => todo!(),
         }
@@ -450,7 +446,21 @@ impl super::CompilerTrait for Compiler {
             functions: HashMap::new(),
             external_calls: HashMap::new(),
         };
-        let result = self.translate_ir_node(&mut ctx, fn_ast)?;
+        let mut result = self.translate_ir_node(&mut ctx, fn_ast)?;
+
+        // Because of iced-x86 shenanigans, we must force the call bytes to zero
+        // for any externals we try to call.
+        // Sorry :(
+        for (_name, labels) in &ctx.external_calls {
+            for label in labels {
+                let ip = result
+                    .label_ip(label)
+                    .expect("couldnt find label ip for external call");
+                for i in (ip + 1)..(ip + 5) {
+                    result.inner.code_buffer[i as usize] = 0;
+                }
+            }
+        }
 
         let name_bytes = b"_start".to_vec();
         let fn_symbol = obj.add_symbol(Symbol {
