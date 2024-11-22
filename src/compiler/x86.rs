@@ -339,7 +339,7 @@ impl Compiler {
                 })?;
                 ctx.add_external_call(name, label);
                 code_asm
-                    .call(0x5 * (ctx.external_calls.len() as u64 + 1))
+                    .call(0)
                     .map_err(|e| CompilerError {
                         kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
                         span: Some(ir_node.span),
@@ -393,10 +393,10 @@ impl super::CompilerTrait for Compiler {
                         // 32 bits at this address with the address of the symbol"
                         offset: call_site + 1,
                         symbol: alloc_sym,
-                        addend: -4, // subtract 4 from the address to get the address of the symbol
+                        addend: 0,
                         flags: RelocationFlags::Generic {
-                            kind: RelocationKind::PltRelative,
-                            encoding: RelocationEncoding::X86Branch,
+                            kind: RelocationKind::Relative,
+                            encoding: RelocationEncoding::X86RipRelative,
                             size: 32, // size of the address to replace
                         },
                     },
