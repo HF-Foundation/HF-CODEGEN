@@ -338,8 +338,10 @@ impl Compiler {
                     span: Some(ir_node.span),
                 })?;
                 ctx.add_external_call(name, label);
+                let last_instr = code_asm.instructions().last().unwrap();
+                let ip = last_instr.ip() + last_instr.len() as u64;
                 code_asm
-                    .call(0)
+                    .call(ip)
                     .map_err(|e| CompilerError {
                         kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
                         span: Some(ir_node.span),
@@ -393,7 +395,7 @@ impl super::CompilerTrait for Compiler {
                         // 32 bits at this address with the address of the symbol"
                         offset: call_site + 1,
                         symbol: alloc_sym,
-                        addend: 0,
+                        addend: -4,
                         flags: RelocationFlags::Generic {
                             kind: RelocationKind::Relative,
                             encoding: RelocationEncoding::X86RipRelative,
