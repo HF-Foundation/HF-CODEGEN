@@ -203,7 +203,7 @@ impl Compiler {
                         span: Some(ir_node.span),
                     })?;
             }
-            // lea  r9,       [r9-1]
+            // lea  r9,       [r9+1]
             // mov  al,       byte[r8]
             // mov  byte[r9], al
             IrOp::StackPush => {
@@ -224,7 +224,7 @@ impl Compiler {
             }
             // mov  al,        byte[r9]
             // mov  byte[r8],  al
-            // lea  rsp,       [rsp+1]
+            // lea  r9,       [r9-1]
             IrOp::StackPop => {
                 code_asm.mov(al, byte_ptr(r9)).map_err(|e| CompilerError {
                     kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
