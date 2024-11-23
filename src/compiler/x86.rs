@@ -203,12 +203,9 @@ impl Compiler {
                         span: Some(ir_node.span),
                     })?;
             }
-            // lea  r9,       [r9+1]
-            // mov  al,       byte[r8]
-            // mov  byte[r9], al
             IrOp::StackPush => {
                 code_asm
-                    .lea(r9, dword_ptr(r9 - 1))
+                    .lea(r9, dword_ptr(r9 + 1))
                     .map_err(|e| CompilerError {
                         kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
                         span: Some(ir_node.span),
@@ -222,9 +219,6 @@ impl Compiler {
                     span: Some(ir_node.span),
                 })?;
             }
-            // mov  al,        byte[r9]
-            // mov  byte[r8],  al
-            // lea  r9,       [r9-1]
             IrOp::StackPop => {
                 code_asm.mov(al, byte_ptr(r9)).map_err(|e| CompilerError {
                     kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
@@ -235,7 +229,7 @@ impl Compiler {
                     span: Some(ir_node.span),
                 })?;
                 code_asm
-                    .lea(r9, dword_ptr(r9 + 1))
+                    .lea(r9, dword_ptr(r9 - 1))
                     .map_err(|e| CompilerError {
                         kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
                         span: Some(ir_node.span),
