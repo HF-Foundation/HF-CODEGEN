@@ -203,10 +203,6 @@ impl Compiler {
                         span: Some(ir_node.span),
                     })?;
             }
-            // push byte ptr[r8]
-            //
-            // doesn't really exist, but we can do:
-            //
             // lea  r9,       [r9-1]
             // mov  al,       byte[r8]
             // mov  byte[r9], al
@@ -226,10 +222,6 @@ impl Compiler {
                     span: Some(ir_node.span),
                 })?;
             }
-            // pop byte ptr[r8]
-            //
-            // doesn't really exist, but we can do:
-            //
             // mov  al,        byte[r9]
             // mov  byte[r8],  al
             // lea  rsp,       [rsp+1]
@@ -333,10 +325,6 @@ impl Compiler {
                     kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
                     span: Some(ir_node.span),
                 })?;
-                code_asm.set_label(&mut label).map_err(|e| CompilerError {
-                    kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
-                    span: Some(ir_node.span),
-                })?;
                 // calling convention specific setup for the call
                 match self.calling_convention {
                     CallingConvention::X86_64_SystemVAMD64 => {
@@ -354,6 +342,10 @@ impl Compiler {
                     _ => todo!(),
                 }
                 // call
+                code_asm.set_label(&mut label).map_err(|e| CompilerError {
+                    kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                    span: Some(ir_node.span),
+                })?;
                 ctx.add_external_call(name, label);
                 code_asm.call(label).map_err(|e| CompilerError {
                     kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
