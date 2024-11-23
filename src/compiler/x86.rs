@@ -322,13 +322,39 @@ impl Compiler {
                 // calling convention specific setup for the call
                 match self.calling_convention {
                     CallingConvention::X86_64_SystemVAMD64 => {
-                        code_asm.mov(rdi, r9).map_err(|e| CompilerError {
+                        // push r8 and r9 on the stack, then put the
+                        // address of each stack element in rdi and rsi
+                        code_asm.push(r8).map_err(|e| CompilerError {
+                            kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                            span: Some(ir_node.span),
+                        })?;
+                        code_asm.push(r9).map_err(|e| CompilerError {
+                            kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                            span: Some(ir_node.span),
+                        })?;
+                        code_asm.lea(rdi, qword_ptr(rsp + 8)).map_err(|e| CompilerError {
+                            kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                            span: Some(ir_node.span),
+                        })?;
+                        code_asm.lea(rsi, qword_ptr(rsp)).map_err(|e| CompilerError {
                             kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
                             span: Some(ir_node.span),
                         })?;
                     }
                     CallingConvention::X86_64_MicrosoftX64 => {
-                        code_asm.mov(rcx, r9).map_err(|e| CompilerError {
+                        code_asm.push(r8).map_err(|e| CompilerError {
+                            kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                            span: Some(ir_node.span),
+                        })?;
+                        code_asm.push(r9).map_err(|e| CompilerError {
+                            kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                            span: Some(ir_node.span),
+                        })?;
+                        code_asm.lea(rcx, qword_ptr(rsp + 8)).map_err(|e| CompilerError {
+                            kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                            span: Some(ir_node.span),
+                        })?;
+                        code_asm.lea(rdx, qword_ptr(rsp)).map_err(|e| CompilerError {
                             kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
                             span: Some(ir_node.span),
                         })?;
@@ -348,13 +374,21 @@ impl Compiler {
                 // calling convention specific cleanup for the call
                 match self.calling_convention {
                     CallingConvention::X86_64_SystemVAMD64 => {
-                        code_asm.mov(r9, rax).map_err(|e| CompilerError {
+                        code_asm.pop(r9).map_err(|e| CompilerError {
+                            kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                            span: Some(ir_node.span),
+                        })?;
+                        code_asm.pop(r8).map_err(|e| CompilerError {
                             kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
                             span: Some(ir_node.span),
                         })?;
                     }
                     CallingConvention::X86_64_MicrosoftX64 => {
-                        code_asm.mov(r9, rax).map_err(|e| CompilerError {
+                        code_asm.pop(r9).map_err(|e| CompilerError {
+                            kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                            span: Some(ir_node.span),
+                        })?;
+                        code_asm.pop(r8).map_err(|e| CompilerError {
                             kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
                             span: Some(ir_node.span),
                         })?;
