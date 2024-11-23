@@ -207,12 +207,12 @@ impl Compiler {
             //
             // doesn't really exist, but we can do:
             //
-            // lea  rsp,       [rsp-1]
-            // mov  al,        byte[r8]
-            // mov  byte[rsp], al
+            // lea  r9,       [r9-1]
+            // mov  al,       byte[r8]
+            // mov  byte[r9], al
             IrOp::StackPush => {
                 code_asm
-                    .lea(rsp, dword_ptr(rsp - 1))
+                    .lea(r9, dword_ptr(r9 - 1))
                     .map_err(|e| CompilerError {
                         kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
                         span: Some(ir_node.span),
@@ -221,7 +221,7 @@ impl Compiler {
                     kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
                     span: Some(ir_node.span),
                 })?;
-                code_asm.mov(byte_ptr(rsp), al).map_err(|e| CompilerError {
+                code_asm.mov(byte_ptr(r9), al).map_err(|e| CompilerError {
                     kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
                     span: Some(ir_node.span),
                 })?;
@@ -230,11 +230,11 @@ impl Compiler {
             //
             // doesn't really exist, but we can do:
             //
-            // mov  al,        byte[rsp]
+            // mov  al,        byte[r9]
             // mov  byte[r8],  al
             // lea  rsp,       [rsp+1]
             IrOp::StackPop => {
-                code_asm.mov(al, byte_ptr(rsp)).map_err(|e| CompilerError {
+                code_asm.mov(al, byte_ptr(r9)).map_err(|e| CompilerError {
                     kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
                     span: Some(ir_node.span),
                 })?;
@@ -243,7 +243,7 @@ impl Compiler {
                     span: Some(ir_node.span),
                 })?;
                 code_asm
-                    .lea(rsp, dword_ptr(rsp + 1))
+                    .lea(r9, dword_ptr(r9 + 1))
                     .map_err(|e| CompilerError {
                         kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
                         span: Some(ir_node.span),
@@ -337,11 +337,44 @@ impl Compiler {
                     kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
                     span: Some(ir_node.span),
                 })?;
+                // calling convention specific setup for the call
+                match self.calling_convention {
+                    CallingConvention::X86_64_SystemVAMD64 => {
+                        code_asm.mov(rdi, r9).map_err(|e| CompilerError {
+                            kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                            span: Some(ir_node.span),
+                        })?;
+                    }
+                    CallingConvention::X86_64_MicrosoftX64 => {
+                        code_asm.mov(rcx, r9).map_err(|e| CompilerError {
+                            kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                            span: Some(ir_node.span),
+                        })?;
+                    }
+                    _ => todo!(),
+                }
+                // call
                 ctx.add_external_call(name, label);
                 code_asm.call(label).map_err(|e| CompilerError {
                     kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
                     span: Some(ir_node.span),
                 })?;
+                // calling convention specific cleanup for the call
+                match self.calling_convention {
+                    CallingConvention::X86_64_SystemVAMD64 => {
+                        code_asm.mov(r9, rax).map_err(|e| CompilerError {
+                            kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                            span: Some(ir_node.span),
+                        })?;
+                    }
+                    CallingConvention::X86_64_MicrosoftX64 => {
+                        code_asm.mov(r9, rax).map_err(|e| CompilerError {
+                            kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                            span: Some(ir_node.span),
+                        })?;
+                    }
+                    _ => todo!(),
+                }
             }
             _ => todo!(),
         }
