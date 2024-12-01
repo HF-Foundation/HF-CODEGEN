@@ -186,7 +186,7 @@ pub fn from_ast(ast: Vec<AstNode>) -> Vec<IrNode> {
     let mut ir_nodes = from_ast_inner(ast);
 
     fix_func_names(&mut ir_nodes);
-    // ir_nodes = flatten_ir(ir_nodes);
+    ir_nodes = inline_funcs(ir_nodes);
 
     ir_nodes
 }
@@ -253,55 +253,6 @@ fn fix_func_names(ir: &mut Vec<IrNode>) {
             _ => {}
         }
     }
-}
-
-fn flatten_ir_impl(
-    scope: Vec<String>,
-    scope_funcs: &HashMap<String, String>,
-    ir: Vec<IrNode>,
-) -> (Vec<IrNode>, Vec<IrNode>) {
-    let mut fns = Vec::new();
-    let mut non_fn_ir = Vec::new();
-
-    let mut new_scope_funcs = scope_funcs.clone();
-
-    for node in ir {
-        match node.node {
-            IrOp::Function(name, children) => {
-                let mut new_scope = scope.clone();
-                new_scope.push(name.clone());
-                let new_name = new_scope.join("{");
-                new_scope_funcs.insert(name.clone(), new_name.clone());
-                let (fn_children, non_fn_children) =
-                    flatten_ir_impl(new_scope, &new_scope_funcs, children);
-                fns.extend(fn_children);
-                fns.push(IrNode {
-                    node: IrOp::Function(new_name, non_fn_children),
-                    span: node.span,
-                });
-            }
-            IrOp::FunctionCall(name) => {
-                let new_name = if let Some(renamed) = new_scope_funcs.get(&name) {
-                    renamed.clone()
-                } else {
-                    name
-                };
-                non_fn_ir.push(IrNode {
-                    node: IrOp::FunctionCall(new_name),
-                    span: node.span,
-                });
-            }
-            _ => non_fn_ir.push(node),
-        }
-    }
-
-    (fns, non_fn_ir)
-}
-
-fn flatten_ir(ir: Vec<IrNode>) -> Vec<IrNode> {
-    let (mut fns, non_fn_ir) = flatten_ir_impl(Vec::new(), &HashMap::new(), ir);
-    fns.extend(non_fn_ir);
-    fns
 }
 
 #[cfg(test)]
