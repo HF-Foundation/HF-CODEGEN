@@ -186,9 +186,43 @@ pub fn from_ast(ast: Vec<AstNode>) -> Vec<IrNode> {
     let mut ir_nodes = from_ast_inner(ast);
 
     fix_func_names(&mut ir_nodes);
-    ir_nodes = flatten_ir(ir_nodes);
+    // ir_nodes = flatten_ir(ir_nodes);
 
     ir_nodes
+}
+
+fn inline_funcs_impl(ir: Vec<IrNode>) -> Vec<IrNode> {
+    let mut result = Vec::new();
+
+    let mut func_map = HashMap::new();
+
+    for node in ir {
+        match node.node {
+            IrOp::Function(name, children) => {
+                func_map.insert(name, inline_funcs_impl(children));
+            }
+            IrOp::FunctionCall(name) => {
+                for child in func_map.get(&name).unwrap_or(&Vec::new()) {
+                    result.push(child.clone());
+                }
+            }
+            _ => result.push(node),
+        }
+    }
+
+    result
+}
+
+pub fn inline_funcs(ir: Vec<IrNode>) -> Vec<IrNode> {
+    ir.into_iter()
+        .map(|node| match node.node {
+            IrOp::Function(name, children) => IrNode {
+                node: IrOp::Function(name, inline_funcs_impl(children)),
+                span: node.span,
+            },
+            _ => node,
+        })
+        .collect::<Vec<_>>()
 }
 
 fn fix_func_names(ir: &mut Vec<IrNode>) {
@@ -421,6 +455,84 @@ mod tests {
                     length: 2,
                 },
             },]
+        );
+    }
+
+    #[test]
+    fn test_ir_nested_func_inlines() {
+        let ir = vec![
+            IrNode {
+                node: IrOp::Function(
+                    "test_func".to_string(),
+                    vec![
+                        IrNode {
+                            node: IrOp::Add(1),
+                            span: Span {
+                                location: (0, 0),
+                                length: 1,
+                            },
+                        },
+                        IrNode {
+                            node: IrOp::Function(
+                                "test_func2".to_string(),
+                                vec![IrNode {
+                                    node: IrOp::Add(1),
+                                    span: Span {
+                                        location: (0, 0),
+                                        length: 1,
+                                    },
+                                }],
+                            ),
+                            span: Span {
+                                location: (0, 1),
+                                length: 1,
+                            },
+                        },
+                    ],
+                ),
+                span: Span {
+                    location: (0, 0),
+                    length: 1,
+                },
+            },
+            IrNode {
+                node: IrOp::FunctionCall("test_func".to_string()),
+                span: Span {
+                    location: (0, 1),
+                    length: 1,
+                },
+            },
+        ];
+
+        let ir = inline_funcs(ir);
+
+        assert_eq!(
+            ir,
+            vec![
+                IrNode {
+                    node: IrOp::Function(
+                        "test_func".to_string(),
+                        vec![IrNode {
+                            node: IrOp::Add(1),
+                            span: Span {
+                                location: (0, 0),
+                                length: 1,
+                            },
+                        }]
+                    ),
+                    span: Span {
+                        location: (0, 0),
+                        length: 1,
+                    },
+                },
+                IrNode {
+                    node: IrOp::FunctionCall("test_func".to_string()),
+                    span: Span {
+                        location: (0, 1),
+                        length: 1,
+                    },
+                }
+            ]
         );
     }
 }
