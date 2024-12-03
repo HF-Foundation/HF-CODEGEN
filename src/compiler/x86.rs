@@ -7,7 +7,6 @@ use iced_x86::BlockEncoderOptions;
 
 use super::{CompilerError, CompilerErrorKind, CompilerSettings};
 use crate::ir::{IrNode, IrOp};
-use crate::scope::ScopeManager;
 use crate::target::CallingConvention;
 
 use object::endian::Endianness;
@@ -26,9 +25,22 @@ pub struct Compiler {
     bitness: u32,
     calling_convention: CallingConvention,
     settings: CompilerSettings,
-    external_calls: HashMap<String, Vec<CodeLabel>>,
-    scopes: ScopeManager,
     data: Vec<DataEntry>,
+}
+
+#[derive(Debug, Clone)]
+struct CompilationContext {
+    functions: HashMap<String, CodeLabel>,
+    external_calls: HashMap<String, Vec<CodeLabel>>,
+}
+impl CompilationContext {
+    fn add_external_call(&mut self, name: String, label: CodeLabel) {
+        if let Some(v) = self.external_calls.get_mut(&name) {
+            v.push(label);
+        } else {
+            self.external_calls.insert(name, vec![label]);
+        }
+    }
 }
 
 impl Compiler {
@@ -41,17 +53,7 @@ impl Compiler {
             bitness,
             calling_convention,
             settings: compiler_settings,
-            external_calls: HashMap::new(),
-            scopes: ScopeManager::new(),
             data: Vec::new(),
-        }
-    }
-
-    fn add_external_call(&mut self, name: String, label: CodeLabel) {
-        if let Some(v) = self.external_calls.get_mut(&name) {
-            v.push(label);
-        } else {
-            self.external_calls.insert(name, vec![label]);
         }
     }
 
@@ -65,11 +67,12 @@ impl Compiler {
     /// TODO: we might wanna return the hashmap here
     fn translate_ir_node(
         &mut self,
+        ctx: &mut CompilationContext,
         ir_node: Vec<IrNode>,
     ) -> Result<CodeAssemblerResult, CompilerError> {
         let mut code_asm = CodeAssembler::new(self.bitness).unwrap();
         for node in ir_node {
-            self.translate_ir_node_impl(&mut code_asm, node)?;
+            self.translate_ir_node_impl(&mut code_asm, node, ctx)?;
         }
         for data_entry in &mut self.data {
             code_asm.set_label(&mut data_entry.label).map_err(|e| CompilerError {
@@ -93,9 +96,32 @@ impl Compiler {
             })
     }
 
+    // fn translate_function(
+    //     &mut self,
+    //     functions: &mut HashMap<String, CodeLabel>,
+    //     name: String,
+    //     span: crate::ir::Span,
+    //     children: Vec<IrNode>,
+    //     skip_skip: bool,
+    //     code_asm: &mut CodeAssembler,
+    // ) -> Result<Vec<u8>, CompilerError> {
+    //     self.translate_function_impl(code_asm, functions, name, span, children, skip_skip)?;
+    // }
+
+    // fn generate_memory_alloc_syscall(&mut self, size: u32) -> Result<(), IcedError> {
+    //     self.code_asm.mov(r9d, 4)?;
+    //     self.code_asm.mov(r8d, 0x00001000 | 0x00002000)?;
+    //     self.code_asm.mov(edx, size)?;
+    //     self.code_asm.xor(ecx, ecx)?;
+    //     // TODO: call VirtualAlloc
+    //     // TODO: `rax` has the result ptr or some error (ignore error)
+    //     Ok(())
+    // }
+
     fn translate_function_impl(
         &mut self,
         code_asm: &mut CodeAssembler,
+        ctx: &mut CompilationContext,
         name: String,
         span: crate::ir::Span,
         children: Vec<IrNode>,
@@ -113,12 +139,12 @@ impl Compiler {
                 kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
                 span: Some(span),
             })?;
-        self.scopes.push_fn((name.clone(), fn_label));
-        self.scopes.push_scope(name.clone());
+        ctx.functions.insert(name.clone(), fn_label);
+        let mut scope_ctx = ctx.clone();
         for fn_ir_node in children {
-            self.translate_ir_node_impl(code_asm, fn_ir_node)?;
+            self.translate_ir_node_impl(code_asm, fn_ir_node, &mut scope_ctx)?;
         }
-        self.scopes.pop_scope();
+        ctx.external_calls = scope_ctx.external_calls;
         code_asm.ret().map_err(|e| CompilerError {
             kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
             span: Some(span),
@@ -131,6 +157,7 @@ impl Compiler {
         &mut self,
         code_asm: &mut CodeAssembler,
         ir_node: IrNode,
+        ctx: &mut CompilationContext,
     ) -> Result<(), CompilerError> {
         match ir_node.node {
             IrOp::Add(n) => {
@@ -265,16 +292,11 @@ impl Compiler {
                     span: Some(ir_node.span),
                 })?;
 
-                let scope_name = format!(
-                    "{};{}",
-                    self.scopes.get_top_scope_name().unwrap_or(String::new()),
-                    self.scopes.next_unnamed_scope_number()
-                );
-                self.scopes.push_scope(scope_name);
+                let mut scope_ctx = ctx.clone();
                 for cond_ir_node in cond_ir_nodes {
-                    self.translate_ir_node_impl(code_asm, cond_ir_node)?;
+                    self.translate_ir_node_impl(code_asm, cond_ir_node, &mut scope_ctx)?;
                 }
-                self.scopes.pop_scope();
+                ctx.external_calls = scope_ctx.external_calls;
 
                 code_asm.jmp(start_label).map_err(|e| CompilerError {
                     kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
@@ -295,14 +317,14 @@ impl Compiler {
                 })?;
             }
             IrOp::Function(name, fn_ir_nodes) => {
-                self.translate_function_impl(code_asm, name, ir_node.span, fn_ir_nodes)?;
+                self.translate_function_impl(code_asm, ctx, name, ir_node.span, fn_ir_nodes)?;
             }
             IrOp::FunctionCall(name) => {
-                let fn_label = self.scopes.get_fn(&name).ok_or(CompilerError {
-                    kind: CompilerErrorKind::FunctionNotFound(name),
+                let fn_label = ctx.functions.get(&name).ok_or(CompilerError {
+                    kind: super::CompilerErrorKind::FunctionNotFound(name.clone()),
                     span: Some(ir_node.span),
                 })?;
-                code_asm.call(fn_label).map_err(|e| CompilerError {
+                code_asm.call(*fn_label).map_err(|e| CompilerError {
                     kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
                     span: Some(ir_node.span),
                 })?;
@@ -326,18 +348,14 @@ impl Compiler {
                             kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
                             span: Some(ir_node.span),
                         })?;
-                        code_asm
-                            .lea(rdi, qword_ptr(rsp + 8))
-                            .map_err(|e| CompilerError {
-                                kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
-                                span: Some(ir_node.span),
-                            })?;
-                        code_asm
-                            .lea(rsi, qword_ptr(rsp))
-                            .map_err(|e| CompilerError {
-                                kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
-                                span: Some(ir_node.span),
-                            })?;
+                        code_asm.lea(rdi, qword_ptr(rsp + 8)).map_err(|e| CompilerError {
+                            kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                            span: Some(ir_node.span),
+                        })?;
+                        code_asm.lea(rsi, qword_ptr(rsp)).map_err(|e| CompilerError {
+                            kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                            span: Some(ir_node.span),
+                        })?;
                     }
                     CallingConvention::X86_64_MicrosoftX64 => {
                         code_asm.push(r8).map_err(|e| CompilerError {
@@ -348,18 +366,14 @@ impl Compiler {
                             kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
                             span: Some(ir_node.span),
                         })?;
-                        code_asm
-                            .lea(rcx, qword_ptr(rsp + 8))
-                            .map_err(|e| CompilerError {
-                                kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
-                                span: Some(ir_node.span),
-                            })?;
-                        code_asm
-                            .lea(rdx, qword_ptr(rsp))
-                            .map_err(|e| CompilerError {
-                                kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
-                                span: Some(ir_node.span),
-                            })?;
+                        code_asm.lea(rcx, qword_ptr(rsp + 8)).map_err(|e| CompilerError {
+                            kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                            span: Some(ir_node.span),
+                        })?;
+                        code_asm.lea(rdx, qword_ptr(rsp)).map_err(|e| CompilerError {
+                            kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                            span: Some(ir_node.span),
+                        })?;
                     }
                     _ => todo!(),
                 }
@@ -368,7 +382,7 @@ impl Compiler {
                     kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
                     span: Some(ir_node.span),
                 })?;
-                self.add_external_call(name, label);
+                ctx.add_external_call(name, label);
                 code_asm.call(label).map_err(|e| CompilerError {
                     kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
                     span: Some(ir_node.span),
@@ -458,7 +472,11 @@ impl Compiler {
 
 impl super::CompilerTrait for Compiler {
     fn compile_to_bytecode(&mut self, ir: Vec<IrNode>) -> Result<Vec<u8>, CompilerError> {
-        Ok(self.translate_ir_node(ir)?.inner.code_buffer)
+        let mut ctx = CompilationContext {
+            functions: HashMap::new(),
+            external_calls: HashMap::new(),
+        };
+        Ok(self.translate_ir_node(&mut ctx, ir)?.inner.code_buffer)
     }
 
     fn compile_to_object_file(
@@ -545,26 +563,16 @@ impl super::CompilerTrait for Compiler {
                 length: 1,
             },
         });
-        let mut result = self.translate_ir_node(fn_ast)?;
-
-        for (name, label) in self.scopes.get_global_functions() {
-            let name_bytes = name.as_bytes().to_vec();
-            let _fn_symbol = obj.add_symbol(Symbol {
-                name: name_bytes.clone(),
-                value: result.label_ip(&label).expect("couldnt find label ip"),
-                size: 0,
-                kind: SymbolKind::Text,
-                scope: SymbolScope::Dynamic,
-                weak: false,
-                section: SymbolSection::Section(text_section),
-                flags: SymbolFlags::None,
-            });
-        }
+        let mut ctx = CompilationContext {
+            functions: HashMap::new(),
+            external_calls: HashMap::new(),
+        };
+        let mut result = self.translate_ir_node(&mut ctx, fn_ast)?;
 
         // Because of iced-x86 shenanigans, we must force the call bytes to zero
         // for any externals we try to call.
         // Sorry :(
-        for (_name, labels) in &self.external_calls {
+        for (_name, labels) in &ctx.external_calls {
             for label in labels {
                 let ip = result
                     .label_ip(label)
@@ -591,12 +599,12 @@ impl super::CompilerTrait for Compiler {
             obj.add_symbol_data(fn_symbol, text_section, &result.inner.code_buffer, 16);
 
         // Update the IP for our start symbol
-        let label = self
-            .scopes
-            .get_fn(&"_start".to_string())
+        let label = ctx
+            .functions
+            .get(&"_start".to_string())
             .expect("couldnt find function label for _start");
         let ip = result
-            .label_ip(&label)
+            .label_ip(label)
             .expect("couldnt find label ip for _start");
         obj.set_symbol_data(fn_symbol, text_section, ip, 0);
 
@@ -605,7 +613,7 @@ impl super::CompilerTrait for Compiler {
         // to a
         // HashMap<String, Vec<u64>>
         // where each u64 is the ip of the label
-        let externals = self.external_calls.iter().map(|(name, label_vec)| {
+        let externals = ctx.external_calls.iter().map(|(name, label_vec)| {
             (
                 name,
                 label_vec
@@ -620,11 +628,11 @@ impl super::CompilerTrait for Compiler {
 
         // Update the IP for symbols
         for (name, symbol_id) in fn_symbol_map {
-            let label = self
-                .scopes
-                .get_fn(&name)
+            let label = ctx
+                .functions
+                .get(&name)
                 .expect("couldnt find function label");
-            let ip = result.label_ip(&label).expect("couldnt find label ip");
+            let ip = result.label_ip(label).expect("couldnt find label ip");
             obj.set_symbol_data(symbol_id, text_section, ip, 0);
         }
 
