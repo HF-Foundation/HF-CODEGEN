@@ -13,9 +13,14 @@ use crate::target::CallingConvention;
 use object::endian::Endianness;
 use object::write::{
     Architecture, BinaryFormat, Object, Relocation, RelocationEncoding, RelocationFlags,
-    RelocationKind, SectionId, SectionKind, StandardSection, Symbol, SymbolFlags, SymbolId,
-    SymbolKind, SymbolScope, SymbolSection,
+    RelocationKind, SectionId, SectionKind, Symbol, SymbolFlags, SymbolKind, SymbolScope,
+    SymbolSection,
 };
+
+struct DataEntry {
+    data: Vec<u8>,
+    label: CodeLabel,
+}
 
 pub struct Compiler {
     bitness: u32,
@@ -23,6 +28,7 @@ pub struct Compiler {
     settings: CompilerSettings,
     external_calls: HashMap<String, Vec<CodeLabel>>,
     scopes: ScopeManager,
+    data: Vec<DataEntry>,
 }
 
 impl Compiler {
@@ -37,6 +43,7 @@ impl Compiler {
             settings: compiler_settings,
             external_calls: HashMap::new(),
             scopes: ScopeManager::new(),
+            data: Vec::new(),
         }
     }
 
@@ -63,6 +70,16 @@ impl Compiler {
         let mut code_asm = CodeAssembler::new(self.bitness).unwrap();
         for node in ir_node {
             self.translate_ir_node_impl(&mut code_asm, node)?;
+        }
+        for data_entry in &mut self.data {
+            code_asm.set_label(&mut data_entry.label).map_err(|e| CompilerError {
+                kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                span: None,
+            })?;
+            code_asm.db(&data_entry.data).map_err(|e| CompilerError {
+                kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                span: None,
+            })?;
         }
         code_asm
             .assemble_options(
@@ -380,6 +397,58 @@ impl Compiler {
                     }
                     _ => todo!(),
                 }
+            }
+            IrOp::PushMem(bytes) => {
+                let mut data = Vec::new();
+                for byte in bytes {
+                    data.push(byte as u8);
+                }
+                let label = code_asm.create_label();
+                let data_len = data.len() as u64;
+                self.data.push(DataEntry { data, label });
+
+                // rdx: amount of bytes
+                code_asm.mov(rdx, data_len).map_err(|e| CompilerError {
+                    kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                    span: Some(ir_node.span),
+                })?;
+                // rdi: destination
+                code_asm.mov(rdi, r8).map_err(|e| CompilerError {
+                    kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                    span: Some(ir_node.span),
+                })?;
+                // rsi: source
+                code_asm
+                    .lea(rsi, byte_ptr(label))
+                    .map_err(|e| CompilerError {
+                        kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                        span: Some(ir_node.span),
+                    })?;
+
+                code_asm.mov(rcx, rdx).map_err(|e| CompilerError {
+                    kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                    span: Some(ir_node.span),
+                })?;
+                code_asm.shr(rcx, 3).map_err(|e| CompilerError {
+                    kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                    span: Some(ir_node.span),
+                })?;
+                code_asm.and(edx, 7).map_err(|e| CompilerError {
+                    kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                    span: Some(ir_node.span),
+                })?;
+                code_asm.rep().movsq().map_err(|e| CompilerError {
+                    kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                    span: Some(ir_node.span),
+                })?;
+                code_asm.mov(rcx, rdx).map_err(|e| CompilerError {
+                    kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                    span: Some(ir_node.span),
+                })?;
+                code_asm.rep().movsb().map_err(|e| CompilerError {
+                    kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                    span: Some(ir_node.span),
+                })?;
             }
             _ => todo!(),
         }

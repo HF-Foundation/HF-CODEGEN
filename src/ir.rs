@@ -42,6 +42,7 @@ pub enum IrOp {
     FunctionCall(String),
     ExternalFunctionCall(String),
     Condition(Vec<IrNode>),
+    PushMem(Vec<u8>),
 }
 
 impl IrOp {
@@ -159,6 +160,7 @@ impl IrBuilder {
                 SyntaxNode::FuncCall(name) => IrOp::FunctionCall(name),
                 SyntaxNode::ExternalFunctionCall(code) => IrOp::ExternalFunctionCall(code),
                 SyntaxNode::Condition(conditions) => IrOp::Condition(from_ast(conditions)),
+                SyntaxNode::StringLiteral(str) => IrOp::PushMem(str.into_bytes()),
             },
             span: Span::from_location(ast.location),
         });
