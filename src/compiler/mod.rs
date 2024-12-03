@@ -36,7 +36,7 @@ pub(crate) trait CompilerTrait {
     fn compile_to_bytecode(&mut self, ast: Vec<IrNode>) -> Result<Vec<u8>, CompilerError>;
     fn compile_to_object_file(
         &mut self,
-        ast: Vec<IrNode>,
+        ir: Vec<IrNode>,
         filename: &str,
     ) -> Result<object::write::Object, CompilerError>;
 }
@@ -70,13 +70,14 @@ impl HfCompiler {
 
     pub fn compile_to_object_file(
         &mut self,
-        ast: Vec<IrNode>,
+        ir: Vec<IrNode>,
         source_filename: &str,
     ) -> Result<object::write::Object, CompilerError> {
-        self.compiler.compile_to_object_file(ast, source_filename)
+        self.compiler.compile_to_object_file(ir, source_filename)
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct CompilerSettings {
     pub optimization_level: u8,
     pub base_address: u64,
