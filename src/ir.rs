@@ -188,7 +188,7 @@ pub fn from_ast(ast: Vec<AstNode>) -> Vec<IrNode> {
     let mut ir_nodes = from_ast_inner(ast);
 
     fix_func_names(&mut ir_nodes);
-    ir_nodes = inline_funcs(ir_nodes);
+    // ir_nodes = inline_funcs(ir_nodes);
 
     ir_nodes
 }
