@@ -236,6 +236,12 @@ impl Compiler {
                     })?;
             }
             IrOp::StackPop => {
+                code_asm
+                    .lea(r9, dword_ptr(r9 - 1))
+                    .map_err(|e| CompilerError {
+                        kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
+                        span: Some(ir_node.span),
+                    })?;
                 code_asm.mov(al, byte_ptr(r9)).map_err(|e| CompilerError {
                     kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
                     span: Some(ir_node.span),
@@ -244,12 +250,6 @@ impl Compiler {
                     kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
                     span: Some(ir_node.span),
                 })?;
-                code_asm
-                    .lea(r9, dword_ptr(r9 - 1))
-                    .map_err(|e| CompilerError {
-                        kind: super::CompilerErrorKind::AssemblerError(e.to_string()),
-                        span: Some(ir_node.span),
-                    })?;
             }
             // equivalent:
             //
